@@ -313,10 +313,9 @@ defmodule SkirOut.GoldenTest do
              expected_dense,
              :exp
            ),
-         :ok <- rt_bytes_drop(typed_ev, input.alternative_bytes, expected_bytes),
-         :ok <- rt_bytes_drop(typed_ev, lit_bytes_list(expected_bytes), expected_bytes) do
+         :ok <- rt_bytes_drop(typed_ev, input.alternative_bytes, expected_bytes) do
       # type_descriptor intentionally skipped (not implemented)
-      :ok
+      rt_bytes_drop(typed_ev, lit_bytes_list(expected_bytes), expected_bytes)
     end
   end
 
