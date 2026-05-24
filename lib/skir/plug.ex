@@ -55,17 +55,24 @@ if Code.ensure_loaded?(Plug.Conn) do
       {response, _state} = Skir.Service.handle_request(service, body, meta, nil)
 
       conn
-      |> put_resp_content_type(response.content_type)
+      # @review
+      # |> put_resp_content_type(response.content_type)
+      |> put_resp_header("content-type", response.content_type)
       |> send_resp(response.status_code, response.data)
       |> halt()
     end
 
+    # @review
+    # defp read_request_body(%Plug.Conn{method: "POST"} = conn) do
+    #   case read_body(conn) do
+    #     {:ok, body, conn} -> {conn, body}
+    #     {:more, _, _} -> raise "request body too large"
+    #     {:error, reason} -> raise "failed to read body: #{inspect(reason)}"
+    #   end
+    # end
+
     defp read_request_body(%Plug.Conn{method: "POST"} = conn) do
-      case read_body(conn) do
-        {:ok, body, conn} -> {conn, body}
-        {:more, _, _} -> raise "request body too large"
-        {:error, reason} -> raise "failed to read body: #{inspect(reason)}"
-      end
+      read_full_body(conn, [])
     end
 
     defp read_request_body(%Plug.Conn{method: "GET"} = conn) do
@@ -74,5 +81,18 @@ if Code.ensure_loaded?(Plug.Conn) do
     end
 
     defp read_request_body(conn), do: {conn, ""}
+
+    defp read_full_body(conn, acc) do
+      case read_body(conn) do
+        {:ok, chunk, conn} ->
+          {conn, IO.iodata_to_binary([acc, chunk])}
+
+        {:more, chunk, conn} ->
+          read_full_body(conn, [acc, chunk])
+
+        {:error, reason} ->
+          raise "failed to read body: #{inspect(reason)}"
+      end
+    end
   end
 end

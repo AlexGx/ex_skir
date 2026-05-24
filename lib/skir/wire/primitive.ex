@@ -35,10 +35,13 @@ defmodule Skir.Wire.Primitive do
   def decode_bool(<<0x00, r::bits>>), do: {:ok, {false, r}}
   def decode_bool(<<0x01, r::bits>>), do: {:ok, {true, r}}
 
-  def decode_bool(<<b, _::bits>>),
-    do: {:error, "unexpected byte for bool: 0x#{Integer.to_string(b, 16)}"}
-
-  def decode_bool(<<>>), do: {:error, "unexpected end of input"}
+  def decode_bool(bits) do
+    # Forward-compat: any numeric wire decodes as bool (non-zero = true).
+    case Skir.Wire.Number.decode_int32(bits) do
+      {:ok, {n, r}} -> {:ok, {n != 0, r}}
+      {:error, _} = err -> err
+    end
+  end
 
   # Floats
 
@@ -99,10 +102,14 @@ defmodule Skir.Wire.Primitive do
 
   def decode_float64(<<0xF1, f::64-float-little, r::bits>>), do: {:ok, {f, r}}
 
-  def decode_float64(<<b, _::bits>>),
-    do: {:error, "unexpected byte for float64: 0x#{Integer.to_string(b, 16)}"}
-
-  def decode_float64(<<>>), do: {:error, "unexpected end of input"}
+  # Forward-compat: any integer wire decodes as float (int → float).
+  # Also handles empty input and unknown markers via decode_int64's own errors.
+  def decode_float64(bits) do
+    case Skir.Wire.Number.decode_int64(bits) do
+      {:ok, {n, r}} -> {:ok, {n * 1.0, r}}
+      {:error, _} = err -> err
+    end
+  end
 
   # Timestamp
 
@@ -129,10 +136,28 @@ defmodule Skir.Wire.Primitive do
     end
   end
 
-  def decode_timestamp(<<b, _::bits>>),
-    do: {:error, "unexpected byte for timestamp: 0x#{Integer.to_string(b, 16)}"}
+  def decode_timestamp(<<0x00, r::bits>>), do: {:ok, {@epoch, r}}
 
-  def decode_timestamp(<<>>), do: {:error, "unexpected end of input"}
+  def decode_timestamp(<<0xEF, ms::64-signed-little, r::bits>>) do
+    case DateTime.from_unix(ms, :millisecond) do
+      {:ok, dt} -> {:ok, {dt, r}}
+      _ -> {:error, "timestamp out of range: #{ms}"}
+    end
+  end
+
+  # Forward-compat: any numeric wire (int or float) decodes as timestamp millis.
+  def decode_timestamp(bits) do
+    case Skir.Wire.Number.decode_int64(bits) do
+      {:ok, {ms, r}} ->
+        case DateTime.from_unix(ms, :millisecond) do
+          {:ok, dt} -> {:ok, {dt, r}}
+          _ -> {:error, "timestamp out of range: #{ms}"}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
 
   # String
 

@@ -81,6 +81,9 @@ defmodule Skir.Wire.Number do
   def decode_int32(<<0xEC, n::16-little, r::bits>>), do: {:ok, {n - 0x10000, r}}
   def decode_int32(<<0xED, n::32-signed-little, r::bits>>), do: {:ok, {n, r}}
 
+  def decode_int32(<<0xF0, v::32-float-little, r::bits>>), do: {:ok, {trunc(v), r}}
+  def decode_int32(<<0xF1, v::64-float-little, r::bits>>), do: {:ok, {trunc(v), r}}
+
   def decode_int32(<<0xEE, _::64, _::bits>>),
     do: {:error, "int64 value cannot be decoded as int32"}
 
@@ -103,6 +106,10 @@ defmodule Skir.Wire.Number do
   def decode_int64(<<0xEA, n::64-little, r::bits>>) do
     if n <= 0x7FFFFFFFFFFFFFFF, do: {:ok, {n, r}}, else: {:error, "hash64 > int64"}
   end
+
+  # Forward-compat: float wire truncated to integer.
+  def decode_int64(<<0xF0, v::32-float-little, r::bits>>), do: {:ok, {trunc(v), r}}
+  def decode_int64(<<0xF1, v::64-float-little, r::bits>>), do: {:ok, {trunc(v), r}}
 
   def decode_int64(<<b, _::bits>>),
     do: {:error, "unexpected marker for int64: 0x#{Integer.to_string(b, 16)}"}

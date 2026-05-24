@@ -81,8 +81,17 @@ defmodule Skir.Struct do
           :__not_built__ ->
             resolved =
               Map.new(@__skir_defaults_raw__, fn
-                {k, {:__lazy_default__, mod}} -> {k, mod.default()}
-                kv -> kv
+                {k, {:__lazy_default__, mod}} when mod == __MODULE__ ->
+                  # Recursive self-reference: leave the sentinel unresolved.
+                  # A recursive type has no finite eager default; materializing
+                  # it would loop forever. Treated as the field's default.
+                  {k, {:__lazy_default__, mod}}
+
+                {k, {:__lazy_default__, mod}} ->
+                  {k, mod.default()}
+
+                kv ->
+                  kv
               end)
 
             :persistent_term.put(key, resolved)
@@ -235,10 +244,12 @@ defmodule Skir.Struct do
     max(fmax, rmax)
   end
 
+  defp build_positions(_fields, _removed, -1), do: []
+
   defp build_positions(fields, removed, max) do
     by_num = Map.new(fields, &{&1.number, &1})
 
-    for i <- 0..max do
+    for i <- 0..max//1 do
       cond do
         Map.has_key?(by_num, i) -> {:field, Map.fetch!(by_num, i)}
         i in removed -> :removed
@@ -337,15 +348,21 @@ defmodule Skir.Struct.Compiler do
     # Resolve nested module defaults lazily.
     defaults =
       Map.new(defaults, fn
-        {k, {:__lazy_default__, mod}} -> {k, mod.default()}
-        kv -> kv
+        {k, {:__lazy_default__, mod}} when mod == module ->
+          {k, {:__lazy_default__, mod}}
+
+        {k, {:__lazy_default__, mod}} ->
+          {k, mod.default()}
+
+        kv ->
+          kv
       end)
 
     # Resolve each field's TypeAdapter once and cache on the field meta.
     # Avoids repeated mod.__skir_serializer__() lookups on the hot path.
     field_adapters =
       Enum.map(fields, fn f ->
-        Map.put(f, :adapter, type_adapter_for(f.type))
+        Map.put(f, :adapter, field_adapter_for(f.type, module))
       end)
 
     # Convert positions list to a tuple for O(1) random access via elem/2.
@@ -385,17 +402,36 @@ defmodule Skir.Struct.Compiler do
         defaults
       ) do
     %TypeAdapter{
-      is_default: fn v ->
-        struct_is_default(v, field_adapters, defaults)
+      is_default: fn
+        # A recursive field's default is the unresolved lazy sentinel; it is
+        # always "default" (an empty recursive struct).
+        {:__lazy_default__, _mod} -> true
+        v -> struct_is_default(v, field_adapters, defaults)
       end,
-      to_json: fn v, flavor ->
-        struct_to_json(v, field_adapters, fields_desc, field_by_num, positions_tuple, flavor)
+      to_json: fn
+        # Sentinel = empty struct: [] dense, {} readable.
+        {:__lazy_default__, _mod}, :dense -> []
+        {:__lazy_default__, _mod}, :readable -> Jason.OrderedObject.new([])
+        v, flavor ->
+          struct_to_json(v, field_adapters, fields_desc, field_by_num, positions_tuple, flavor)
       end,
-      decode_json: fn term, path ->
-        struct_decode_json(term, module, field_adapters, field_by_num, defaults, path)
+      decode_json: fn term, path, keep ->
+        struct_decode_json(
+          term,
+          module,
+          field_adapters,
+          field_by_num,
+          positions_tuple,
+          defaults,
+          path,
+          keep
+        )
       end,
-      encode_binary: fn v, acc ->
-        struct_encode_binary(v, acc, fields_desc, field_by_num, positions_tuple)
+      encode_binary: fn
+        # Sentinel = empty struct: 0xF6 (zero slots).
+        {:__lazy_default__, _mod}, acc -> [acc, <<0xF6>>]
+        v, acc ->
+          struct_encode_binary(v, acc, fields_desc, field_by_num, positions_tuple)
       end,
       decode_binary: fn bits, keep ->
         struct_decode_binary(bits, module, field_by_num, positions_tuple, defaults, keep)
@@ -430,6 +466,44 @@ defmodule Skir.Struct.Compiler do
 
   def type_adapter_for(mod) when is_atom(mod),
     do: mod.__skir_serializer__().type_adapter
+
+  #
+  # Resolve a field's TypeAdapter. For a direct self-reference (recursive
+  # field whose type is the struct being built), return a LAZY adapter that
+  # resolves the serializer on first use — building it eagerly here would
+  # recurse forever (gleam's FieldSerializer.Lazy).
+  defp field_adapter_for(field_type, module) do
+    if recursive_self_ref?(field_type, module) do
+      lazy_type_adapter(module)
+    else
+      type_adapter_for(field_type)
+    end
+  end
+
+  # Direct self-reference: the field's type is the module itself, or an
+  # optional/array wrapping it.
+  defp recursive_self_ref?(mod, module) when is_atom(mod), do: mod == module
+  defp recursive_self_ref?({:optional, inner}, module), do: recursive_self_ref?(inner, module)
+  defp recursive_self_ref?({:array, inner}, module), do: recursive_self_ref?(inner, module)
+  defp recursive_self_ref?({:array, inner, _opts}, module), do: recursive_self_ref?(inner, module)
+  defp recursive_self_ref?(_, _), do: false
+
+  # Lazy adapter: each closure resolves mod.__skir_serializer__() at call
+  # time. By the time a value is encoded/decoded the serializer is fully
+  # built and cached, so this resolves once and breaks the build-time cycle.
+  defp lazy_type_adapter(mod) do
+    %TypeAdapter{
+      is_default: fn v -> mod.__skir_serializer__().type_adapter.is_default.(v) end,
+      to_json: fn v, flavor -> mod.__skir_serializer__().type_adapter.to_json.(v, flavor) end,
+      decode_json: fn term, path, keep ->
+        mod.__skir_serializer__().type_adapter.decode_json.(term, path, keep)
+      end,
+      encode_binary: fn v, acc -> mod.__skir_serializer__().type_adapter.encode_binary.(v, acc) end,
+      decode_binary: fn bits, keep ->
+        mod.__skir_serializer__().type_adapter.decode_binary.(bits, keep)
+      end
+    }
+  end
 
   # --- is_default ---
 
@@ -473,25 +547,39 @@ defmodule Skir.Struct.Compiler do
   # --- to_json ---
 
   defp struct_to_json(value, _field_adapters, fields_desc, field_by_num, positions_tuple, :dense) do
-    count = highest_non_default(value, fields_desc)
+    unrec = Map.get(value, :__skir_unrecognized__)
 
-    for i <- 0..(count - 1)//1 do
-      case elem(positions_tuple, i) do
-        :removed ->
-          0
+    {count, tail} =
+      case unrec do
+        %Skir.Unrecognized{format: :json, data: tail} when tail != [] ->
+          # Preserved unrecognized JSON tail: emit ALL recognized slots
+          # (no trailing-default trimming, or indices would shift) + the tail.
+          {tuple_size(positions_tuple), tail}
 
-        {:field, _} ->
-          f = Map.fetch!(field_by_num, i)
-          v = Map.get(value, f.name)
-
-          try do
-            f.adapter.to_json.(v, :dense)
-          rescue
-            e in Skir.EncodeError ->
-              reraise %{e | path: [f.name | e.path]}, __STACKTRACE__
-          end
+        _ ->
+          {highest_non_default(value, fields_desc), []}
       end
-    end
+
+    slots =
+      for i <- 0..(count - 1)//1 do
+        case elem(positions_tuple, i) do
+          :removed ->
+            0
+
+          {:field, _} ->
+            f = Map.fetch!(field_by_num, i)
+            v = Map.get(value, f.name)
+
+            try do
+              f.adapter.to_json.(v, :dense)
+            rescue
+              e in Skir.EncodeError ->
+                reraise %{e | path: [f.name | e.path]}, __STACKTRACE__
+            end
+        end
+      end
+
+    slots ++ tail
   end
 
   defp struct_to_json(
@@ -514,7 +602,7 @@ defmodule Skir.Struct.Compiler do
         end
       end
 
-    Map.new(pairs)
+    Jason.OrderedObject.new(pairs)
   end
 
   defp highest_non_default(value, fields_desc) do
@@ -526,8 +614,19 @@ defmodule Skir.Struct.Compiler do
 
   # --- decode_json ---
 
-  defp struct_decode_json(list, module, _field_adapters, field_by_num, defaults, path)
+  defp struct_decode_json(
+         list,
+         module,
+         _field_adapters,
+         field_by_num,
+         positions_tuple,
+         defaults,
+         path,
+         keep
+       )
        when is_list(list) do
+    recognized = tuple_size(positions_tuple)
+
     fields_map =
       list
       |> Enum.with_index()
@@ -539,7 +638,7 @@ defmodule Skir.Struct.Compiler do
           f ->
             decoded =
               try do
-                f.adapter.decode_json.(v, path ++ [f.name])
+                f.adapter.decode_json.(v, path ++ [f.name], keep)
               rescue
                 e in DecodeError -> reraise DecodeError.prepend(e, f.name), __STACKTRACE__
               end
@@ -548,11 +647,46 @@ defmodule Skir.Struct.Compiler do
         end
       end)
 
+    fields_map =
+      if keep == :keep and length(list) > recognized do
+        tail = Enum.drop(list, recognized)
+
+        Map.put(fields_map, :__skir_unrecognized__, %Skir.Unrecognized{
+          format: :json,
+          data: tail,
+          array_len: length(list)
+        })
+      else
+        fields_map
+      end
+
     struct(module, fields_map)
   end
 
-  defp struct_decode_json(map, module, field_adapters, _field_by_num, defaults, path)
-       when is_map(map) do
+  defp struct_decode_json(
+         0,
+         module,
+         _field_adapters,
+         _field_by_num,
+         _positions_tuple,
+         defaults,
+         _path,
+         _keep
+       ) do
+    struct(module, defaults)
+  end
+
+  defp struct_decode_json(
+         map,
+         module,
+         field_adapters,
+         _field_by_num,
+         _positions_tuple,
+         defaults,
+         path,
+         keep
+       )
+       when is_map(map) and not is_struct(map) do
     field_by_name = Map.new(field_adapters, &{Atom.to_string(&1.name), &1})
 
     fields_map =
@@ -564,7 +698,7 @@ defmodule Skir.Struct.Compiler do
           f ->
             decoded =
               try do
-                f.adapter.decode_json.(v, path ++ [f.name])
+                f.adapter.decode_json.(v, path ++ [f.name], keep)
               rescue
                 e in DecodeError -> reraise DecodeError.prepend(e, f.name), __STACKTRACE__
               end
@@ -576,7 +710,7 @@ defmodule Skir.Struct.Compiler do
     struct(module, fields_map)
   end
 
-  defp struct_decode_json(other, _module, _, _, _, path) do
+  defp struct_decode_json(other, _module, _, _, _, _, path, _keep) do
     raise DecodeError, path: path, expected: :struct, got: other, reason: :type_mismatch
   end
 

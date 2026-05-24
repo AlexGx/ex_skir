@@ -1,4 +1,4 @@
-# deprecated, can be useful later for non native JSON support
+# deprecated, can be useful later for non-native JSON support
 # defmodule Skir.JSON do
 #   @moduledoc """
 #   Minimal JSON codec — runs offline without Jason. For real use, swap with

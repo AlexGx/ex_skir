@@ -39,19 +39,10 @@ defmodule Skir.Enum.TypeGen do
 
   # --- payload type for wraps ---
 
-  defp payload_type_ast(:bool), do: quote(do: boolean())
-  defp payload_type_ast(:int32), do: quote(do: Skir.Types.int32())
-  defp payload_type_ast(:int64), do: quote(do: Skir.Types.int64())
-  defp payload_type_ast(:hash64), do: quote(do: Skir.Types.hash64())
-  defp payload_type_ast(:float32), do: quote(do: Skir.Types.float32())
-  defp payload_type_ast(:float64), do: quote(do: Skir.Types.float64())
-  defp payload_type_ast(:string), do: quote(do: String.t())
-  defp payload_type_ast(:bytes), do: quote(do: Skir.Types.bytes())
-  defp payload_type_ast(:timestamp), do: quote(do: Skir.Types.timestamp())
-
-  defp payload_type_ast(mod) when is_atom(mod) do
-    quote do: unquote(mod).t()
-  end
+  # Delegate to the shared resolver so wrapper payloads support every type
+  # form (primitives, modules, optional, array, keyed array), not just
+  # primitives and bare modules.
+  defp payload_type_ast(wraps), do: Skir.Struct.TypeGen.type_spec_for(wraps)
 
   # --- fold list into pipe-union ---
 

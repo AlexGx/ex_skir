@@ -24,14 +24,14 @@ defmodule Skir.Serializer.Builtin do
         v, :readable -> v
       end,
       decode_json: fn
-        true, _ -> true
-        false, _ -> false
-        nil, _ -> false
-        n, _ when is_integer(n) -> n != 0
-        f, _ when is_float(f) -> f != 0.0
-        "0", _ -> false
-        s, _ when is_binary(s) -> true
-        _other, _ -> false
+        true, _, _ -> true
+        false, _, _ -> false
+        nil, _, _ -> false
+        n, _, _ when is_integer(n) -> n != 0
+        f, _, _ when is_float(f) -> f != 0.0
+        "0", _, _ -> false
+        s, _, _ when is_binary(s) -> true
+        _other, _, _ -> false
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_bool(v)] end,
       decode_binary: lift(&Primitive.decode_bool/1)
@@ -45,11 +45,11 @@ defmodule Skir.Serializer.Builtin do
       is_default: &(&1 == 0),
       to_json: fn v, _ -> v end,
       decode_json: fn
-        n, _ when is_integer(n) -> n
-        f, _ when is_float(f) -> trunc(f)
-        nil, _ -> 0
-        s, _ when is_binary(s) -> parse_int_lenient(s)
-        _other, _ -> 0
+        n, _, _ when is_integer(n) -> n
+        f, _, _ when is_float(f) -> trunc(f)
+        nil, _, _ -> 0
+        s, _, _ when is_binary(s) -> parse_int_lenient(s)
+        _other, _, _ -> 0
       end,
       encode_binary: fn v, acc -> [acc, Number.encode_int32(v)] end,
       decode_binary: lift(&Number.decode_int32/1)
@@ -64,11 +64,11 @@ defmodule Skir.Serializer.Builtin do
         v, _ when is_integer(v) -> Integer.to_string(v)
       end,
       decode_json: fn
-        n, _ when is_integer(n) -> n
-        f, _ when is_float(f) -> round(f)
-        nil, _ -> 0
-        s, _ when is_binary(s) -> parse_int_lenient(s)
-        _other, _ -> 0
+        n, _, _ when is_integer(n) -> n
+        f, _, _ when is_float(f) -> round(f)
+        nil, _, _ -> 0
+        s, _, _ when is_binary(s) -> parse_int_lenient(s)
+        _other, _, _ -> 0
       end,
       encode_binary: fn v, acc -> [acc, Number.encode_int64(v)] end,
       decode_binary: lift(&Number.decode_int64/1)
@@ -83,15 +83,15 @@ defmodule Skir.Serializer.Builtin do
         v, _ when is_integer(v) -> Integer.to_string(v)
       end,
       decode_json: fn
-        n, _ when is_integer(n) and n >= 0 -> n
+        n, _, _ when is_integer(n) and n >= 0 -> n
         # negative → default
-        n, _ when is_integer(n) -> 0
-        f, _ when is_float(f) and f >= 0.0 -> round(f)
+        n, _, _ when is_integer(n) -> 0
+        f, _, _ when is_float(f) and f >= 0.0 -> round(f)
         # negative float → default
-        f, _ when is_float(f) -> 0
-        nil, _ -> 0
-        s, _ when is_binary(s) -> parse_int_lenient(s)
-        _other, _ -> 0
+        f, _, _ when is_float(f) -> 0
+        nil, _, _ -> 0
+        s, _, _ when is_binary(s) -> parse_int_lenient(s)
+        _other, _, _ -> 0
       end,
       encode_binary: fn v, acc -> [acc, Number.encode_hash64(v)] end,
       decode_binary: lift(&Number.decode_hash64/1)
@@ -116,14 +116,14 @@ defmodule Skir.Serializer.Builtin do
         v, _ -> v
       end,
       decode_json: fn
-        f, _ when is_float(f) -> f
-        n, _ when is_integer(n) -> n * 1.0
-        nil, _ -> 0.0
-        "NaN", _ -> :nan
-        "Infinity", _ -> :infinity
-        "-Infinity", _ -> :neg_infinity
-        s, _ when is_binary(s) -> parse_float_lenient(s)
-        _other, _ -> 0.0
+        f, _, _ when is_float(f) -> f
+        n, _, _ when is_integer(n) -> n * 1.0
+        nil, _, _ -> 0.0
+        "NaN", _, _ -> :nan
+        "Infinity", _, _ -> :infinity
+        "-Infinity", _, _ -> :neg_infinity
+        s, _, _ when is_binary(s) -> parse_float_lenient(s)
+        _other, _, _ -> 0.0
       end,
       encode_binary: fn v, acc -> [acc, enc.(v)] end,
       decode_binary: lift(dec)
@@ -142,11 +142,11 @@ defmodule Skir.Serializer.Builtin do
       is_default: &(&1 == ""),
       to_json: fn v, _ -> v end,
       decode_json: fn
-        s, _ when is_binary(s) -> s
-        nil, _ -> ""
-        n, _ when is_integer(n) -> ""
-        f, _ when is_float(f) -> ""
-        _other, _ -> ""
+        s, _, _ when is_binary(s) -> s
+        nil, _, _ -> ""
+        n, _, _ when is_integer(n) -> ""
+        f, _, _ when is_float(f) -> ""
+        _other, _, _ -> ""
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_string(v)] end,
       decode_binary: lift(&Primitive.decode_string/1)
@@ -163,28 +163,28 @@ defmodule Skir.Serializer.Builtin do
         v, :readable -> "hex:" <> Base.encode16(v, case: :lower)
       end,
       decode_json: fn
-        "hex:" <> hex, _ ->
+        "hex:" <> hex, _, _ ->
           case Base.decode16(hex, case: :mixed) do
             {:ok, b} -> b
             :error -> ""
           end
 
-        s, _ when is_binary(s) ->
+        s, _, _ when is_binary(s) ->
           case Base.decode64(s) do
             {:ok, b} -> b
             :error -> ""
           end
 
-        nil, _ ->
+        nil, _, _ ->
           ""
 
-        n, _ when is_integer(n) ->
+        n, _, _ when is_integer(n) ->
           ""
 
-        f, _ when is_float(f) ->
+        f, _, _ when is_float(f) ->
           ""
 
-        _other, _ ->
+        _other, _, _ ->
           ""
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_bytes(v)] end,
@@ -204,18 +204,18 @@ defmodule Skir.Serializer.Builtin do
           DateTime.to_unix(dt, :millisecond)
 
         %DateTime{} = dt, :readable ->
-          %{
-            "unix_millis" => DateTime.to_unix(dt, :millisecond),
-            "formatted" => DateTime.to_iso8601(dt)
-          }
+          Jason.OrderedObject.new([
+            {"unix_millis", DateTime.to_unix(dt, :millisecond)},
+            {"formatted", DateTime.to_iso8601(dt)}
+          ])
       end,
       decode_json: fn
-        ms, _ when is_integer(ms) -> from_unix_ms_safe(ms)
-        f, _ when is_float(f) -> from_unix_ms_safe(round(f))
-        %{"unix_millis" => ms}, _ when is_integer(ms) -> from_unix_ms_safe(ms)
-        nil, _ -> @epoch
-        s, _ when is_binary(s) -> from_unix_ms_safe(parse_int_lenient(s))
-        _other, _ -> @epoch
+        ms, _, _ when is_integer(ms) -> from_unix_ms_safe(ms)
+        f, _, _ when is_float(f) -> from_unix_ms_safe(round(f))
+        %{"unix_millis" => ms}, _, _ when is_integer(ms) -> from_unix_ms_safe(ms)
+        nil, _, _ -> @epoch
+        s, _, _ when is_binary(s) -> from_unix_ms_safe(parse_int_lenient(s))
+        _other, _, _ -> @epoch
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_timestamp(v)] end,
       decode_binary: lift(&Primitive.decode_timestamp/1)
@@ -232,9 +232,9 @@ defmodule Skir.Serializer.Builtin do
         v, flavor -> inner.to_json.(v, flavor)
       end,
       decode_json: fn
-        nil, _ -> nil
-        0, _ -> nil
-        v, path -> inner.decode_json.(v, path)
+        nil, _, _ -> nil
+        0, _, _ -> nil
+        v, path, keep -> inner.decode_json.(v, path, keep)
       end,
       encode_binary: fn
         nil, acc -> [acc, Primitive.encode_null()]
@@ -256,19 +256,19 @@ defmodule Skir.Serializer.Builtin do
         Enum.map(list, fn v -> inner.to_json.(v, flavor) end)
       end,
       decode_json: fn
-        list, path when is_list(list) ->
+        list, path, keep when is_list(list) ->
           list
           |> Enum.with_index()
           |> Enum.map(fn {v, i} ->
             try do
-              inner.decode_json.(v, path ++ [i])
+              inner.decode_json.(v, path ++ [i], keep)
             rescue
               e in Skir.DecodeError ->
                 reraise Skir.DecodeError.prepend(e, i), __STACKTRACE__
             end
           end)
 
-        _other, _ ->
+        _other, _, _ ->
           []
       end,
       encode_binary: fn list, acc -> encode_array_iodata(list, acc, inner) end,
@@ -282,7 +282,8 @@ defmodule Skir.Serializer.Builtin do
   Identical wire format to `list/1`, but produces a `%Skir.KeyedList{}`
   on decode and accepts both plain lists and `%KeyedList{}` on encode.
   """
-  def keyed_list(%TypeAdapter{} = inner, key_field) when is_atom(key_field) do
+  def keyed_list(%TypeAdapter{} = inner, key_field)
+      when is_atom(key_field) or is_list(key_field) do
     %TypeAdapter{
       is_default: fn
         %Skir.KeyedList{items: []} -> true
@@ -297,13 +298,13 @@ defmodule Skir.Serializer.Builtin do
           Enum.map(list, fn v -> inner.to_json.(v, flavor) end)
       end,
       decode_json: fn
-        list, path when is_list(list) ->
+        list, path, keep when is_list(list) ->
           items =
             list
             |> Enum.with_index()
             |> Enum.map(fn {v, i} ->
               try do
-                inner.decode_json.(v, path ++ [i])
+                inner.decode_json.(v, path ++ [i], keep)
               rescue
                 e in Skir.DecodeError ->
                   reraise Skir.DecodeError.prepend(e, i), __STACKTRACE__
@@ -312,7 +313,7 @@ defmodule Skir.Serializer.Builtin do
 
           Skir.KeyedList.new(items, key_field)
 
-        _other, _ ->
+        _other, _, _ ->
           Skir.KeyedList.empty(key_field)
       end,
       encode_binary: fn
@@ -418,11 +419,11 @@ defmodule Skir.Serializer.Builtin do
   end
 
   # Safe conversion from unix millis to DateTime, returning epoch on overflow.
-  @epoch_for_timestamp ~U[1970-01-01 00:00:00.000Z]
+  @epoch ~U[1970-01-01 00:00:00.000Z]
   defp from_unix_ms_safe(ms) when is_integer(ms) do
     case DateTime.from_unix(ms, :millisecond) do
       {:ok, dt} -> dt
-      _ -> @epoch_for_timestamp
+      _ -> @epoch
     end
   end
 end

@@ -406,7 +406,7 @@ defmodule Skir.Service do
   defp run_method(service, method, handler, request_dynamic, readable, req_meta) do
     request_value =
       try do
-        method.request_serializer.type_adapter.decode_json.(request_dynamic, [])
+        method.request_serializer.type_adapter.decode_json.(request_dynamic, [], :drop)
       rescue
         e in Skir.DecodeError ->
           throw({:bad_request, "bad request: " <> Exception.message(e)})

@@ -26,7 +26,7 @@ defmodule Skir.ServiceClient do
   ## Example
 
       client = Skir.ServiceClient.new("http://localhost:8000/api")
-      {:ok, 25.0} = Skir.ServiceClient.invoke(client, MyApp.Schema.Methods.square_method(), 5.0)
+      {:ok, 25.0} = Skir.ServiceClient.invoke(client, SkirOut.Schema.Methods.square_method(), 5.0)
 
   ## Headers
 

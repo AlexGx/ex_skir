@@ -58,14 +58,34 @@ defmodule Skir.Enum do
   The `wraps:` value can be a primitive (`:string`, `:int32`, etc.) or
   another schema module.
   """
+  # defmacro variant(name, number, opts) do
+  #   wraps_ast = Keyword.get(opts, :wraps)
+
+  #   resolved =
+  #     case wraps_ast do
+  #       nil -> nil
+  #       {:__aliases__, _, _} -> Macro.expand(wraps_ast, __CALLER__)
+  #       atom when is_atom(atom) -> atom
+  #     end
+
+  #   kind = if resolved, do: :wrapper, else: :constant
+
+  #   quote do
+  #     @__skir_variants__ %{
+  #       name: unquote(name),
+  #       number: unquote(number),
+  #       kind: unquote(kind),
+  #       wraps: unquote(Macro.escape(resolved))
+  #     }
+  #   end
+  # end
   defmacro variant(name, number, opts) do
     wraps_ast = Keyword.get(opts, :wraps)
 
     resolved =
       case wraps_ast do
         nil -> nil
-        {:__aliases__, _, _} -> Macro.expand(wraps_ast, __CALLER__)
-        atom when is_atom(atom) -> atom
+        ast -> Skir.Struct.Resolver.resolve(ast, __CALLER__)
       end
 
     kind = if resolved, do: :wrapper, else: :constant
@@ -247,8 +267,8 @@ defmodule Skir.Enum.Compiler do
         _ -> false
       end,
       to_json: fn v, flavor -> enum_to_json(v, variants, flavor) end,
-      decode_json: fn term, path ->
-        enum_decode_json(term, by_number, by_name, removed, path)
+      decode_json: fn term, path, keep ->
+        enum_decode_json(term, by_number, by_name, removed, path, keep)
       end,
       encode_binary: fn v, acc -> enum_encode_binary(v, acc, variants) end,
       decode_binary: fn bits, keep ->
@@ -260,7 +280,22 @@ defmodule Skir.Enum.Compiler do
   # ----- to_json -----
 
   defp enum_to_json(:unknown, _, :dense), do: 0
-  defp enum_to_json(:unknown, _, :readable), do: "UNKNOWN"
+  defp enum_to_json(:unknown, _, :readable), do: "unknown"
+
+  defp enum_to_json(
+         {:unknown, %Skir.Unrecognized{format: :json, data: term}},
+         _variants,
+         _flavor
+       ),
+       do: term
+
+  defp enum_to_json({:unknown, %Skir.Unrecognized{format: :binary}}, _variants, flavor) do
+    # Binary-preserved unknown can't render to JSON meaningfully; fall back.
+    case flavor do
+      :dense -> 0
+      :readable -> "unknown"
+    end
+  end
 
   defp enum_to_json(atom, variants, :dense) when is_atom(atom) do
     case Enum.find(variants, &(&1.name == atom and &1.kind == :constant)) do
@@ -270,7 +305,7 @@ defmodule Skir.Enum.Compiler do
   end
 
   defp enum_to_json(atom, _variants, :readable) when is_atom(atom),
-    do: atom |> Atom.to_string() |> String.upcase()
+    do: Atom.to_string(atom)
 
   defp enum_to_json({name, payload}, variants, :dense) do
     case Enum.find(variants, &(&1.name == name and &1.kind == :wrapper)) do
@@ -290,15 +325,15 @@ defmodule Skir.Enum.Compiler do
         %{"kind" => Atom.to_string(name), "value" => inner.to_json.(payload, :readable)}
 
       nil ->
-        "UNKNOWN"
+        "unknown"
     end
   end
 
   # ----- decode_json -----
 
-  defp enum_decode_json(0, _, _, _, _), do: :unknown
+  defp enum_decode_json(0, _, _, _, _, _), do: :unknown
 
-  defp enum_decode_json(n, by_number, _by_name, removed, _path) when is_integer(n) do
+  defp enum_decode_json(n, by_number, _by_name, removed, _path, keep) when is_integer(n) do
     cond do
       n in removed ->
         :unknown
@@ -310,11 +345,11 @@ defmodule Skir.Enum.Compiler do
         end
 
       true ->
-        :unknown
+        json_unknown(n, keep)
     end
   end
 
-  defp enum_decode_json(s, _by_number, by_name, _removed, _path) when is_binary(s) do
+  defp enum_decode_json(s, _by_number, by_name, _removed, _path, _keep) when is_binary(s) do
     key = String.downcase(s)
 
     case Enum.find(by_name, fn {k, _} -> String.downcase(k) == key end) do
@@ -323,7 +358,7 @@ defmodule Skir.Enum.Compiler do
     end
   end
 
-  defp enum_decode_json([n, payload], by_number, _by_name, removed, path)
+  defp enum_decode_json([n, payload] = term, by_number, _by_name, removed, path, keep)
        when is_integer(n) do
     cond do
       n in removed ->
@@ -333,29 +368,37 @@ defmodule Skir.Enum.Compiler do
         case Map.fetch!(by_number, n) do
           %{kind: :wrapper, name: name, wraps: w} ->
             inner = wrapper_inner_ta(w)
-            {name, inner.decode_json.(payload, path)}
+            {name, inner.decode_json.(payload, path, keep)}
 
-          _ ->
-            :unknown
+          %{kind: :constant, name: name} ->
+            # Wire is in wrapper form [n, payload] but variant n is a constant
+            # in this schema (forward-compat): take the constant, drop payload.
+            name
         end
 
       true ->
-        :unknown
+        json_unknown(term, keep)
     end
   end
 
-  defp enum_decode_json(%{"kind" => k, "value" => v}, _by_number, by_name, _removed, path) do
+  defp enum_decode_json(%{"kind" => k, "value" => v}, _by_number, by_name, _removed, path, keep) do
     case Map.get(by_name, k) do
       %{kind: :wrapper, name: name, wraps: w} ->
         inner = wrapper_inner_ta(w)
-        {name, inner.decode_json.(v, path)}
+        {name, inner.decode_json.(v, path, keep)}
 
       _ ->
         :unknown
     end
   end
 
-  defp enum_decode_json(_other, _, _, _, _), do: :unknown
+  defp enum_decode_json(_other, _, _, _, _, _keep), do: :unknown
+
+  # Unknown variant in JSON: capture the raw JSON term when keeping, else drop.
+  defp json_unknown(term, :keep),
+    do: {:unknown, %Skir.Unrecognized{format: :json, data: term}}
+
+  defp json_unknown(_term, :drop), do: :unknown
 
   # ----- encode_binary -----
 
@@ -488,11 +531,12 @@ defmodule Skir.Enum.Compiler do
               {:error, _} = err -> err
             end
 
-          _ ->
-            # Number says constant but wire says wrapper — malformed,
-            # skip and emit :unknown (no preservation for malformed data).
+          %{kind: :constant, name: name} ->
+            # Wire is in wrapper form but variant n is a constant in this
+            # schema (forward-compat across schema versions): take the
+            # constant and skip the payload to keep `rest` aligned.
             case Skip.skip_value(bits) do
-              {:ok, rest} -> {:ok, {:unknown, rest}}
+              {:ok, rest} -> {:ok, {name, rest}}
               {:error, _} = err -> err
             end
         end

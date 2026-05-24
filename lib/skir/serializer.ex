@@ -106,18 +106,26 @@ defmodule Skir.Serializer do
 
   def encode_json(%__MODULE__{type_adapter: ta}, value, flavor \\ :dense) do
     term = ta.to_json.(value, flavor)
-    # @review: JSON.encode here?
-    JSON.encode_to_iodata!(term) |> IO.iodata_to_binary()
+
+    case flavor do
+      :readable ->
+        Jason.encode!(term, pretty: true)
+
+      :dense ->
+        JSON.encode_to_iodata!(term) |> IO.iodata_to_binary()
+    end
   end
 
-  def decode_json(%__MODULE__{} = s, json_bin) do
-    {:ok, decode_json!(s, json_bin)}
+  def decode_json(%__MODULE__{} = s, json_bin, opts \\ []) do
+    {:ok, decode_json!(s, json_bin, opts)}
   rescue
     e in DecodeError -> {:error, e}
   end
 
-  def decode_json!(%__MODULE__{type_adapter: ta}, json_bin) when is_binary(json_bin) do
+  def decode_json!(%__MODULE__{type_adapter: ta}, json_bin, opts \\ [])
+      when is_binary(json_bin) do
+    keep = if Keyword.get(opts, :keep, false), do: :keep, else: :drop
     term = JSON.decode!(json_bin)
-    ta.decode_json.(term, [])
+    ta.decode_json.(term, [], keep)
   end
 end

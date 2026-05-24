@@ -34,7 +34,7 @@ defmodule Skir.Methods do
 
   ## Example
 
-      defmodule MyApp.Schema.Methods do
+      defmodule SkirOut.Schema.Methods do
         use Skir.Methods
 
         method :square, 1001,
@@ -50,7 +50,7 @@ defmodule Skir.Methods do
   After `use`, the macro generates one zero-arity function per method
   that returns a `%Skir.Method{}`:
 
-      MyApp.Schema.Methods.square_method()
+      SkirOut.Schema.Methods.square_method()
       # => %Skir.Method{name: "Square", number: 1001, ...}
 
   The generated function name is `<snake_name>_method` — `:square` becomes

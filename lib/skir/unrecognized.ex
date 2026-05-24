@@ -20,8 +20,8 @@ defmodule Skir.Unrecognized do
   defstruct [:format, :data, :array_len]
 
   @type t :: %__MODULE__{
-          format: :binary,
-          data: binary(),
+          format: :binary | :json,
+          data: binary() | [term()] | term(),
           array_len: non_neg_integer() | nil
         }
 end
@@ -31,8 +31,13 @@ defimpl Inspect, for: Skir.Unrecognized do
 
   @spec inspect(Skir.Unrecognized.t(), Inspect.Opts.t()) :: Inspect.Algebra.t()
   def inspect(%Skir.Unrecognized{format: format, data: data, array_len: array_len}, _opts) do
-    size = byte_size(data)
+    desc =
+      case format do
+        :binary -> "#{byte_size(data)} byte(s)"
+        :json -> "#{length(List.wrap(data))} json item(s)"
+      end
+
     suffix = if array_len, do: ", slots: #{array_len}", else: ""
-    concat(["#SkirUnrecognized<", to_string(format), ", ", "#{size} byte(s)", suffix, ">"])
+    concat(["#SkirUnrecognized<", to_string(format), ", ", desc, suffix, ">"])
   end
 end

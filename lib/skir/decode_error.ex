@@ -65,15 +65,6 @@ defmodule Skir.DecodeError do
 
   defp format_path([]), do: "<root>"
 
-  # defp format_path(parts) do
-  #   parts
-  #   |> Enum.map(fn
-  #     i when is_integer(i) -> "[#{i}]"
-  #     a when is_atom(a) -> "." <> Atom.to_string(a)
-  #   end)
-  #   |> Enum.join("")
-  #   |> String.trim_leading(".")
-  # end
   defp format_path(parts) do
     parts
     |> Enum.map_join("", fn

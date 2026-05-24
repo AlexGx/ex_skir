@@ -18,7 +18,7 @@ defmodule Skir.Wire.Struct do
   Encode the struct header for `count` slots. Returns iodata.
   """
   @spec encode_slot_count(non_neg_integer()) :: iodata()
-  def encode_slot_count(0), do: <<0x00>>
+  def encode_slot_count(0), do: <<0xF6>>
   def encode_slot_count(1), do: <<0xF7>>
   def encode_slot_count(2), do: <<0xF8>>
   def encode_slot_count(3), do: <<0xF9>>
