@@ -185,8 +185,6 @@ defmodule Skir.Methods do
   end
 
   defp camelize(atom) when is_atom(atom) do
-    atom
-    |> Atom.to_string()
-    |> Macro.camelize()
+    atom |> Atom.to_string() |> Macro.camelize()
   end
 end

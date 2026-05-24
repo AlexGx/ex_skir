@@ -100,7 +100,7 @@ defmodule Skir.Wire.Skip do
     end
   end
 
-  @spec capture_value(binary()) ::
+  @spec capture_n_values(non_neg_integer(), binary()) ::
           {:ok, {binary(), binary()}} | {:error, String.t()}
   def capture_n_values(n, bits) when n >= 0 do
     before_bits = bit_size(bits)
