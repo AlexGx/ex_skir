@@ -410,8 +410,12 @@ defmodule Skir.Struct.Compiler do
       end,
       to_json: fn
         # Sentinel = empty struct: [] dense, {} readable.
-        {:__lazy_default__, _mod}, :dense -> []
-        {:__lazy_default__, _mod}, :readable -> Jason.OrderedObject.new([])
+        {:__lazy_default__, _mod}, :dense ->
+          []
+
+        {:__lazy_default__, _mod}, :readable ->
+          Jason.OrderedObject.new([])
+
         v, flavor ->
           struct_to_json(v, field_adapters, fields_desc, field_by_num, positions_tuple, flavor)
       end,
@@ -429,7 +433,9 @@ defmodule Skir.Struct.Compiler do
       end,
       encode_binary: fn
         # Sentinel = empty struct: 0xF6 (zero slots).
-        {:__lazy_default__, _mod}, acc -> [acc, <<0xF6>>]
+        {:__lazy_default__, _mod}, acc ->
+          [acc, <<0xF6>>]
+
         v, acc ->
           struct_encode_binary(v, acc, fields_desc, field_by_num, positions_tuple)
       end,
@@ -498,7 +504,9 @@ defmodule Skir.Struct.Compiler do
       decode_json: fn term, path, keep ->
         mod.__skir_serializer__().type_adapter.decode_json.(term, path, keep)
       end,
-      encode_binary: fn v, acc -> mod.__skir_serializer__().type_adapter.encode_binary.(v, acc) end,
+      encode_binary: fn v, acc ->
+        mod.__skir_serializer__().type_adapter.encode_binary.(v, acc)
+      end,
       decode_binary: fn bits, keep ->
         mod.__skir_serializer__().type_adapter.decode_binary.(bits, keep)
       end

@@ -58,27 +58,6 @@ defmodule Skir.Enum do
   The `wraps:` value can be a primitive (`:string`, `:int32`, etc.) or
   another schema module.
   """
-  # defmacro variant(name, number, opts) do
-  #   wraps_ast = Keyword.get(opts, :wraps)
-
-  #   resolved =
-  #     case wraps_ast do
-  #       nil -> nil
-  #       {:__aliases__, _, _} -> Macro.expand(wraps_ast, __CALLER__)
-  #       atom when is_atom(atom) -> atom
-  #     end
-
-  #   kind = if resolved, do: :wrapper, else: :constant
-
-  #   quote do
-  #     @__skir_variants__ %{
-  #       name: unquote(name),
-  #       number: unquote(number),
-  #       kind: unquote(kind),
-  #       wraps: unquote(Macro.escape(resolved))
-  #     }
-  #   end
-  # end
   defmacro variant(name, number, opts) do
     wraps_ast = Keyword.get(opts, :wraps)
 

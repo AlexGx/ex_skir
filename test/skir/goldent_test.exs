@@ -475,8 +475,6 @@ defmodule SkirOut.GoldenTest do
 
     failures =
       unit_tests
-      # temp reject
-      # |> Enum.reject(&(&1.test_number in [1085, 1086]))
       |> Enum.flat_map(fn ut ->
         case verify(ut.assertion) do
           :ok -> []
