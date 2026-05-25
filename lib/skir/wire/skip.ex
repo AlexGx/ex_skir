@@ -73,9 +73,9 @@ defmodule Skir.Wire.Skip do
     end
   end
 
-  defp skip_lp(bits) do
-    with {:ok, {len, r}} <- Number.decode_uint32(bits),
-         <<_::binary-size(len), r2::bits>> <- r do
+  defp skip_lp(binary) do
+    with {:ok, {len, r}} <- Number.decode_uint32(binary),
+         <<_::binary-size(len), r2::binary>> <- r do
       {:ok, r2}
     else
       {:error, _} = err -> err
@@ -86,13 +86,14 @@ defmodule Skir.Wire.Skip do
   @doc "Capture the bytes of one value without removing them from input."
   @spec capture_value(binary()) ::
           {:ok, {binary(), binary()}} | {:error, String.t()}
-  def capture_value(bits) do
-    before_bits = bit_size(bits)
+  def capture_value(binary) do
+    # Optimized: Using byte_size instead of bit_size avoids a division instruction later
+    before_bytes = byte_size(binary)
 
-    case skip_value(bits) do
+    case skip_value(binary) do
       {:ok, rest} ->
-        consumed = div(before_bits - bit_size(rest), 8)
-        <<captured::binary-size(consumed), _::bits>> = bits
+        consumed = before_bytes - byte_size(rest)
+        <<captured::binary-size(consumed), _::binary>> = binary
         {:ok, {captured, rest}}
 
       {:error, _} = err ->

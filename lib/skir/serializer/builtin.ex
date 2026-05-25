@@ -9,6 +9,7 @@ defmodule Skir.Serializer.Builtin do
   alias Skir.TypeAdapter
   alias Skir.Wire.Number
   alias Skir.Wire.Primitive
+  alias Skir.TypeDescriptor
 
   # Adapt a 1-arg Wire decoder into a 2-arg TypeAdapter decoder.
   # Primitives can't preserve unrecognized data, so the keep flag is ignored.
@@ -34,7 +35,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> false
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_bool(v)] end,
-      decode_binary: lift(&Primitive.decode_bool/1)
+      decode_binary: lift(&Primitive.decode_bool/1),
+      type_descriptor: fn -> primitive_td(:bool) end
     }
   end
 
@@ -52,7 +54,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> 0
       end,
       encode_binary: fn v, acc -> [acc, Number.encode_int32(v)] end,
-      decode_binary: lift(&Number.decode_int32/1)
+      decode_binary: lift(&Number.decode_int32/1),
+      type_descriptor: fn -> primitive_td(:int32) end
     }
   end
 
@@ -71,7 +74,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> 0
       end,
       encode_binary: fn v, acc -> [acc, Number.encode_int64(v)] end,
-      decode_binary: lift(&Number.decode_int64/1)
+      decode_binary: lift(&Number.decode_int64/1),
+      type_descriptor: fn -> primitive_td(:int64) end
     }
   end
 
@@ -94,7 +98,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> 0
       end,
       encode_binary: fn v, acc -> [acc, Number.encode_hash64(v)] end,
-      decode_binary: lift(&Number.decode_hash64/1)
+      decode_binary: lift(&Number.decode_hash64/1),
+      type_descriptor: fn -> primitive_td(:hash64) end
     }
   end
 
@@ -106,7 +111,7 @@ defmodule Skir.Serializer.Builtin do
   def float64,
     do: float_adapter(:float64, &Primitive.encode_float64/1, &Primitive.decode_float64/1)
 
-  defp float_adapter(_name, enc, dec) do
+  defp float_adapter(name, enc, dec) do
     %TypeAdapter{
       is_default: &float_default?/1,
       to_json: fn
@@ -126,7 +131,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> 0.0
       end,
       encode_binary: fn v, acc -> [acc, enc.(v)] end,
-      decode_binary: lift(dec)
+      decode_binary: lift(dec),
+      type_descriptor: fn -> primitive_td(name) end
     }
   end
 
@@ -149,7 +155,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> ""
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_string(v)] end,
-      decode_binary: lift(&Primitive.decode_string/1)
+      decode_binary: lift(&Primitive.decode_string/1),
+      type_descriptor: fn -> primitive_td(:string) end
     }
   end
 
@@ -188,7 +195,8 @@ defmodule Skir.Serializer.Builtin do
           ""
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_bytes(v)] end,
-      decode_binary: lift(&Primitive.decode_bytes/1)
+      decode_binary: lift(&Primitive.decode_bytes/1),
+      type_descriptor: fn -> primitive_td(:bytes) end
     }
   end
 
@@ -218,7 +226,8 @@ defmodule Skir.Serializer.Builtin do
         _other, _, _ -> @epoch
       end,
       encode_binary: fn v, acc -> [acc, Primitive.encode_timestamp(v)] end,
-      decode_binary: lift(&Primitive.decode_timestamp/1)
+      decode_binary: lift(&Primitive.decode_timestamp/1),
+      type_descriptor: fn -> primitive_td(:timestamp) end
     }
   end
 
@@ -243,7 +252,8 @@ defmodule Skir.Serializer.Builtin do
       decode_binary: fn
         <<0xFF, r::bits>>, _keep -> {:ok, {nil, r}}
         bits, keep -> inner.decode_binary.(bits, keep)
-      end
+      end,
+      type_descriptor: fn -> wrap_optional_td(inner) end
     }
   end
 
@@ -272,7 +282,8 @@ defmodule Skir.Serializer.Builtin do
           []
       end,
       encode_binary: fn list, acc -> encode_array_iodata(list, acc, inner) end,
-      decode_binary: fn bits, keep -> decode_array(bits, inner, keep) end
+      decode_binary: fn bits, keep -> decode_array(bits, inner, keep) end,
+      type_descriptor: fn -> wrap_array_td(inner, "") end
     }
   end
 
@@ -328,7 +339,8 @@ defmodule Skir.Serializer.Builtin do
           {:ok, {items, rest}} -> {:ok, {Skir.KeyedList.new(items, key_field), rest}}
           {:error, _} = err -> err
         end
-      end
+      end,
+      type_descriptor: fn -> wrap_array_td(inner, key_extractor_str(key_field)) end
     }
   end
 
@@ -425,5 +437,27 @@ defmodule Skir.Serializer.Builtin do
       {:ok, dt} -> dt
       _ -> @epoch
     end
+  end
+
+  defp primitive_td(p) do
+    %TypeDescriptor{type_sig: {:primitive, p}, records: %{}}
+  end
+
+  defp wrap_optional_td(inner) do
+    inner_td = inner.type_descriptor.()
+    %TypeDescriptor{type_sig: {:optional, inner_td.type_sig}, records: inner_td.records}
+  end
+
+  defp wrap_array_td(inner, key_extractor) do
+    inner_td = inner.type_descriptor.()
+    %TypeDescriptor{type_sig: {:array, inner_td.type_sig, key_extractor}, records: inner_td.records}
+  end
+
+  # key path [:sub_item, :weekday, :kind] -> "sub_item.weekday.kind"
+  # single atom :id -> "id"
+  defp key_extractor_str(key_field) when is_atom(key_field), do: Atom.to_string(key_field)
+
+  defp key_extractor_str(key_field) when is_list(key_field) do
+    Enum.map_join(key_field, ".", &Atom.to_string/1)
   end
 end

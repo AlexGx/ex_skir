@@ -70,6 +70,7 @@ defmodule Skir.Wire.Number do
         "Skir internal error: encode_uint32 expects 0..#{0xFFFFFFFF}, got #{inspect(other)}"
       )
 
+  @spec decode_int32(binary()) :: {:ok, {integer(), binary()}} | {:error, String.t()}
   def decode_int32(<<n, r::bits>>) when n <= 231, do: {:ok, {n, r}}
   def decode_int32(<<0xE8, n::16-little, r::bits>>), do: {:ok, {n, r}}
 
@@ -95,6 +96,7 @@ defmodule Skir.Wire.Number do
 
   def decode_int32(<<>>), do: {:error, "unexpected end of input"}
 
+  @spec decode_int64(binary()) :: {:ok, {integer(), binary()}} | {:error, String.t()}
   def decode_int64(<<n, r::bits>>) when n <= 231, do: {:ok, {n, r}}
   def decode_int64(<<0xE8, n::16-little, r::bits>>), do: {:ok, {n, r}}
   def decode_int64(<<0xE9, n::32-little, r::bits>>), do: {:ok, {n, r}}
@@ -116,6 +118,7 @@ defmodule Skir.Wire.Number do
 
   def decode_int64(<<>>), do: {:error, "unexpected end of input"}
 
+  @spec decode_hash64(binary()) :: {:ok, {non_neg_integer(), binary()}} | {:error, String.t()}
   def decode_hash64(<<n, r::bits>>) when n <= 231, do: {:ok, {n, r}}
   def decode_hash64(<<0xE8, n::16-little, r::bits>>), do: {:ok, {n, r}}
   def decode_hash64(<<0xE9, n::32-little, r::bits>>), do: {:ok, {n, r}}
@@ -129,11 +132,12 @@ defmodule Skir.Wire.Number do
 
   def decode_hash64(<<>>), do: {:error, "unexpected end of input"}
 
-  def decode_uint32(<<n, r::bits>>) when n <= 231, do: {:ok, {n, r}}
-  def decode_uint32(<<0xE8, n::16-little, r::bits>>), do: {:ok, {n, r}}
-  def decode_uint32(<<0xE9, n::32-little, r::bits>>), do: {:ok, {n, r}}
+  @spec decode_uint32(binary()) :: {:ok, {non_neg_integer(), binary()}} | {:error, String.t()}
+  def decode_uint32(<<n, r::binary>>) when n <= 231, do: {:ok, {n, r}}
+  def decode_uint32(<<0xE8, n::16-little, r::binary>>), do: {:ok, {n, r}}
+  def decode_uint32(<<0xE9, n::32-little, r::binary>>), do: {:ok, {n, r}}
 
-  def decode_uint32(<<b, _::bits>>),
+  def decode_uint32(<<b, _::binary>>),
     do: {:error, "unexpected marker for uint32: 0x#{Integer.to_string(b, 16)}"}
 
   def decode_uint32(<<>>), do: {:error, "unexpected end of input"}

@@ -21,7 +21,16 @@ defmodule Skir.TypeAdapter do
   """
 
   @enforce_keys [:is_default, :to_json, :decode_json, :encode_binary, :decode_binary]
-  defstruct [:is_default, :to_json, :decode_json, :encode_binary, :decode_binary]
+  # Optional 6th closure: () -> %Skir.TypeDescriptor{}. nil until an adapter
+  defstruct [
+    :is_default,
+    :to_json,
+    :decode_json,
+    :encode_binary,
+    :decode_binary,
+    # implements reflection (added incrementally; struct/enum fill it later).
+    :type_descriptor
+  ]
 
   @type t :: %__MODULE__{
           is_default: (term() -> boolean()),
@@ -29,6 +38,7 @@ defmodule Skir.TypeAdapter do
           decode_json: (term(), [atom() | non_neg_integer()], :keep | :drop -> term()),
           encode_binary: (term(), iodata() -> iodata()),
           decode_binary: (bitstring(), :keep | :drop ->
-                            {:ok, {term(), bitstring()}} | {:error, String.t()})
+                            {:ok, {term(), bitstring()}} | {:error, String.t()}),
+          type_descriptor: (-> Skir.TypeDescriptor.t()) | nil
         }
 end
