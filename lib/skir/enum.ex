@@ -31,12 +31,18 @@ defmodule Skir.Enum do
 
   defmacro __using__(opts) do
     stable_id = Keyword.get(opts, :id)
+    module_path = Keyword.get(opts, :module_path, "")
+    qualified_name = Keyword.get(opts, :qualified_name)
+    doc = Keyword.get(opts, :doc, "")
 
     quote do
       import Skir.Enum, only: [variant: 2, variant: 3, removed: 1]
       Module.register_attribute(__MODULE__, :__skir_variants__, accumulate: true)
       Module.register_attribute(__MODULE__, :__skir_removed__, accumulate: true)
       @__skir_stable_id__ unquote(stable_id)
+      @__skir_module_path__ unquote(module_path)
+      @__skir_qualified_name__ unquote(qualified_name)
+      @__skir_doc__ unquote(doc)
       @before_compile Skir.Enum
     end
   end
@@ -48,7 +54,8 @@ defmodule Skir.Enum do
         name: unquote(name),
         number: unquote(number),
         kind: :constant,
-        wraps: nil
+        wraps: nil,
+        doc: ""
       }
     end
   end
@@ -60,6 +67,7 @@ defmodule Skir.Enum do
   """
   defmacro variant(name, number, opts) do
     wraps_ast = Keyword.get(opts, :wraps)
+    doc = Keyword.get(opts, :doc, "")
 
     resolved =
       case wraps_ast do
@@ -74,7 +82,8 @@ defmodule Skir.Enum do
         name: unquote(name),
         number: unquote(number),
         kind: unquote(kind),
-        wraps: unquote(Macro.escape(resolved))
+        wraps: unquote(Macro.escape(resolved)),
+        doc: unquote(doc)
       }
     end
   end
@@ -127,15 +136,23 @@ defmodule Skir.Enum do
 
       # closures can't live in a module attribute, so we cache the built
       # serializer in :persistent_term on first call.
-      @__skir_serializer_args__ {@__skir_variants_resolved__, @__skir_removed_resolved__}
+      @__skir_serializer_args__ {
+        @__skir_variants_resolved__,
+        @__skir_removed_resolved__,
+        %{
+          module_path: @__skir_module_path__,
+          qualified_name: @__skir_qualified_name__ || __MODULE__ |> Module.split() |> List.last(),
+          doc: @__skir_doc__ || ""
+        }
+      }
 
       def __skir_serializer__ do
         key = {__MODULE__, :__skir_serializer__}
 
         case :persistent_term.get(key, :__not_built__) do
           :__not_built__ ->
-            {variants, removed} = @__skir_serializer_args__
-            serializer = Skir.Enum.Compiler.build_serializer(__MODULE__, variants, removed)
+            {variants, removed, meta} = @__skir_serializer_args__
+            serializer = Skir.Enum.Compiler.build_serializer(__MODULE__, variants, removed, meta)
             :persistent_term.put(key, serializer)
             serializer
 
@@ -223,19 +240,24 @@ defmodule Skir.Enum.Compiler do
   alias Skir.Serializer
   alias Skir.Wire.Number
   alias Skir.Wire.Skip
+  alias Skir.TypeDescriptor
+  alias Skir.TypeDescriptor.EnumDescriptor
+  alias Skir.TypeDescriptor.EnumVariant
 
-  def build_serializer(module, variants, removed) do
-    ta = build_type_adapter(variants, removed)
+  def build_serializer(module, variants, removed, meta) do
+    ta = build_type_adapter(module, variants, removed, meta)
 
     %Serializer{
       type_adapter: ta,
       module: module,
       name: module |> Module.split() |> List.last(),
-      qualified_name: inspect(module)
+      qualified_name: meta.qualified_name,
+      module_path: meta.module_path,
+      doc: meta.doc
     }
   end
 
-  defp build_type_adapter(variants, removed) do
+  defp build_type_adapter(module, variants, removed, meta) do
     by_number = Map.new(variants, fn v -> {v.number, v} end)
     by_name = Map.new(variants, fn v -> {Atom.to_string(v.name), v} end)
 
@@ -252,6 +274,9 @@ defmodule Skir.Enum.Compiler do
       encode_binary: fn v, acc -> enum_encode_binary(v, acc, variants) end,
       decode_binary: fn bits, keep ->
         enum_decode_binary(bits, by_number, removed, keep)
+      end,
+      type_descriptor: fn ->
+        enum_type_descriptor(module, variants, removed, meta)
       end
     }
   end
@@ -559,4 +584,69 @@ defmodule Skir.Enum.Compiler do
   defp default_for_inner(:bytes), do: ""
   defp default_for_inner(:timestamp), do: ~U[1970-01-01 00:00:00.000Z]
   defp default_for_inner(mod) when is_atom(mod), do: mod.default()
+
+  # type descriptor
+  # Build the TypeDescriptor for this enum: Record(id) + EnumDescriptor with
+  # variants, plus transitive closure of records referenced by wrapper variants.
+  # Mirrors gleam enum_serializer enum_type_descriptor.
+  defp enum_type_descriptor(module, variants, removed, meta) do
+    id = meta.module_path <> ":" <> meta.qualified_name
+
+    {variant_descs, all_records} =
+      Enum.map_reduce(variants, %{}, fn v, acc ->
+        case v.kind do
+          :constant ->
+            vd = %EnumVariant{
+              kind: :constant,
+              name: Atom.to_string(v.name),
+              number: v.number,
+              doc: v.doc || ""
+            }
+
+            {vd, acc}
+
+          :wrapper ->
+            {sig, records} = variant_type_sig_and_records(v.wraps, module, id)
+
+            vd = %EnumVariant{
+              kind: :wrapper,
+              name: Atom.to_string(v.name),
+              number: v.number,
+              variant_type: sig,
+              doc: v.doc || ""
+            }
+
+            {vd, Map.merge(acc, records)}
+        end
+      end)
+
+    ed = %EnumDescriptor{
+      name: meta.qualified_name |> String.split(".") |> List.last(),
+      qualified_name: meta.qualified_name,
+      module_path: meta.module_path,
+      doc: meta.doc || "",
+      removed_numbers: removed,
+      variants: variant_descs
+    }
+
+    %TypeDescriptor{type_sig: {:record, id}, records: Map.put(all_records, id, {:enum, ed})}
+  end
+
+  # For a wrapper variant's inner type: return its TypeSignature + records.
+  # For a direct self-reference (recursive enum variant), build the type_sig
+  # structurally with EMPTY records — descending would recurse forever
+  # (gleam: wrapper_variant with type_sig: Some(sig), records: dict.new()).
+  defp variant_type_sig_and_records(wraps, module, self_id) do
+    if recursive_self_ref?(wraps, module) do
+      {recursive_type_sig(wraps, self_id), %{}}
+    else
+      inner_td = wrapper_inner_ta(wraps).type_descriptor.()
+      {inner_td.type_sig, inner_td.records}
+    end
+  end
+
+  defp recursive_self_ref?(mod, module) when is_atom(mod), do: mod == module
+  defp recursive_self_ref?(_, _), do: false
+
+  defp recursive_type_sig(mod, self_id) when is_atom(mod), do: {:record, self_id}
 end

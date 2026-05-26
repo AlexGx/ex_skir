@@ -1,3 +1,29 @@
+defmodule Skir.TypeDescriptor.StructField do
+  @moduledoc false
+  defstruct [:name, :number, :field_type, doc: ""]
+
+  @type t :: %__MODULE__{
+          name: String.t(),
+          number: integer(),
+          field_type: term(),
+          doc: String.t()
+        }
+end
+
+defmodule Skir.TypeDescriptor.StructDescriptor do
+  @moduledoc false
+  defstruct [:name, :qualified_name, :module_path, doc: "", removed_numbers: [], fields: []]
+
+  @type t :: %__MODULE__{
+          name: String.t(),
+          qualified_name: String.t(),
+          module_path: String.t(),
+          doc: String.t(),
+          removed_numbers: [integer()],
+          fields: [StructField.t()]
+        }
+end
+
 defmodule Skir.TypeDescriptor do
   @moduledoc """
   A self-describing Skir type: a type signature plus all record definitions
@@ -40,32 +66,6 @@ defmodule Skir.TypeDescriptor do
           type_sig: type_sig(),
           records: %{String.t() => record_descriptor()}
         }
-
-  defmodule StructField do
-    @moduledoc false
-    defstruct [:name, :number, :field_type, doc: ""]
-
-    @type t :: %__MODULE__{
-            name: String.t(),
-            number: integer(),
-            field_type: term(),
-            doc: String.t()
-          }
-  end
-
-  defmodule StructDescriptor do
-    @moduledoc false
-    defstruct [:name, :qualified_name, :module_path, doc: "", removed_numbers: [], fields: []]
-
-    @type t :: %__MODULE__{
-            name: String.t(),
-            qualified_name: String.t(),
-            module_path: String.t(),
-            doc: String.t(),
-            removed_numbers: [integer()],
-            fields: [StructField.t()]
-          }
-  end
 
   defmodule EnumVariant do
     @moduledoc false

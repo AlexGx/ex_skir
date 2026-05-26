@@ -450,7 +450,11 @@ defmodule Skir.Serializer.Builtin do
 
   defp wrap_array_td(inner, key_extractor) do
     inner_td = inner.type_descriptor.()
-    %TypeDescriptor{type_sig: {:array, inner_td.type_sig, key_extractor}, records: inner_td.records}
+
+    %TypeDescriptor{
+      type_sig: {:array, inner_td.type_sig, key_extractor},
+      records: inner_td.records
+    }
   end
 
   # key path [:sub_item, :weekday, :kind] -> "sub_item.weekday.kind"

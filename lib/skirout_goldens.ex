@@ -2,7 +2,6 @@
 
 defmodule SkirOut.UnitTest do
   @moduledoc false
-
   use Skir.Struct
 
   field :test_number, :int32, 0
@@ -206,11 +205,13 @@ defmodule SkirOut.Point do
   A point
   """
 
-  use Skir.Struct
+  use Skir.Struct,
+    module_path: "@gepheum/skir-golden-tests/goldens.skir",
+    qualified_name: "Point",
+    doc: "A point"
 
   removed 0
-  # x coordinate
-  field :x, :int32, 1
+  field(:x, :int32, 1, doc: "x coordinate")
   removed 2
   removed 3
   field :y, :int32, 4
@@ -221,7 +222,9 @@ end
 defmodule SkirOut.Color do
   @moduledoc false
 
-  use Skir.Struct
+  use Skir.Struct,
+    module_path: "@gepheum/skir-golden-tests/goldens.skir",
+    qualified_name: "Color"
 
   field :r, :int32, 0
   field :g, :int32, 1
@@ -230,14 +233,14 @@ defmodule SkirOut.Color do
 end
 
 defmodule SkirOut.MyEnum do
-  @moduledoc """
-  my enum
-  """
+  @moduledoc "my enum"
+  use Skir.Enum,
+    module_path: "@gepheum/skir-golden-tests/goldens.skir",
+    qualified_name: "MyEnum",
+    doc: "my enum"
 
-  use Skir.Enum
-
-  # all good
-  variant :ok, 1
+  variant :ok, 1, doc: "all good"
+  removed 2
   variant :color, 4, wraps: SkirOut.Color
   variant :bool, 5, wraps: :bool
 end
@@ -295,7 +298,9 @@ end
 defmodule SkirOut.RecStruct do
   @moduledoc false
 
-  use Skir.Struct
+  use Skir.Struct,
+    module_path: "@gepheum/skir-golden-tests/goldens.skir",
+    qualified_name: "RecStruct"
 
   field :a, SkirOut.RecStruct, 0
   field :b, :bool, 1
@@ -304,7 +309,9 @@ end
 defmodule SkirOut.RecEnum do
   @moduledoc false
 
-  use Skir.Enum
+  use Skir.Enum,
+    module_path: "@gepheum/skir-golden-tests/goldens.skir",
+    qualified_name: "RecEnum"
 
   variant :foo, 1
   variant :e, 2, wraps: SkirOut.RecEnum

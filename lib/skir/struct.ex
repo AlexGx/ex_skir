@@ -8,10 +8,11 @@ defmodule Skir.Struct do
   alias Skir.DecodeError
   alias Skir.Wire.Skip
 
-  @spec __using__(keyword()) ::
-          {:__block__, [], [{:@ | :import | {any(), any(), any()}, [...], [...]}, ...]}
   defmacro __using__(opts) do
     stable_id = Keyword.get(opts, :id)
+    module_path = Keyword.get(opts, :module_path, "")
+    qualified_name = Keyword.get(opts, :qualified_name)
+    doc = Keyword.get(opts, :doc, "")
 
     quote do
       import Skir.Struct, only: [field: 3, field: 4, removed: 1]
@@ -19,6 +20,9 @@ defmodule Skir.Struct do
       Module.register_attribute(__MODULE__, :__skir_fields__, accumulate: true)
       Module.register_attribute(__MODULE__, :__skir_removed__, accumulate: true)
       @__skir_stable_id__ unquote(stable_id)
+      @__skir_module_path__ unquote(module_path)
+      @__skir_qualified_name__ unquote(qualified_name)
+      @__skir_doc__ unquote(doc)
       @before_compile Skir.Struct
     end
   end
@@ -132,7 +136,13 @@ defmodule Skir.Struct do
       @__skir_serializer_args__ {
         unquote(Macro.escape(fields)),
         unquote(Macro.escape(positions)),
-        unquote(Macro.escape(defaults))
+        unquote(Macro.escape(defaults)),
+        %{
+          module_path: @__skir_module_path__,
+          qualified_name: @__skir_qualified_name__ || __MODULE__ |> Module.split() |> List.last(),
+          doc: @__skir_doc__ || "",
+          removed: unquote(Macro.escape(removed))
+        }
       }
 
       def __skir_serializer__ do
@@ -140,10 +150,16 @@ defmodule Skir.Struct do
 
         case :persistent_term.get(key, :__not_built__) do
           :__not_built__ ->
-            {fields, positions, defaults} = @__skir_serializer_args__
+            {fields, positions, defaults, meta} = @__skir_serializer_args__
 
             serializer =
-              Skir.Struct.Compiler.build_serializer(__MODULE__, fields, positions, defaults)
+              Skir.Struct.Compiler.build_serializer(
+                __MODULE__,
+                fields,
+                positions,
+                defaults,
+                meta
+              )
 
             :persistent_term.put(key, serializer)
             serializer
@@ -339,12 +355,16 @@ defmodule Skir.Struct.Compiler do
   # Build the runtime serializer for a struct. Heavy prep work happens once
   # in build_serializer; closures capture the prepared state.
 
+  alias Skir.TypeDescriptor
   alias Skir.Serializer
   alias Skir.TypeAdapter
   alias Skir.DecodeError
   alias Skir.Wire.Skip
+  alias Skir.TypeDescriptor
+  alias Skir.TypeDescriptor.StructDescriptor
+  alias Skir.TypeDescriptor.StructField
 
-  def build_serializer(module, fields, positions, defaults) do
+  def build_serializer(module, fields, positions, defaults, meta) do
     # Resolve nested module defaults lazily.
     defaults =
       Map.new(defaults, fn
@@ -358,21 +378,18 @@ defmodule Skir.Struct.Compiler do
           kv
       end)
 
-    # Resolve each field's TypeAdapter once and cache on the field meta.
-    # Avoids repeated mod.__skir_serializer__() lookups on the hot path.
+    # Resolve each field's TypeAdapter once. Recursive self-ref fields get a
+    # lazy adapter carrying a precomputed type_sig (so building the type
+    # descriptor doesn't recurse forever — mirrors gleam FieldSerializer.Lazy).
+    self_id = meta.module_path <> ":" <> meta.qualified_name
+
     field_adapters =
       Enum.map(fields, fn f ->
-        Map.put(f, :adapter, field_adapter_for(f.type, module))
+        Map.put(f, :adapter, field_adapter_for(f.type, module, self_id))
       end)
 
-    # Convert positions list to a tuple for O(1) random access via elem/2.
     positions_tuple = List.to_tuple(positions)
-
-    # Map of field number -> field meta (resolved adapter included).
-    # Built once, captured by closures.
     field_by_num = Map.new(field_adapters, &{&1.number, &1})
-
-    # Pre-sort by descending number for highest_non_default — used every encode.
     fields_desc = Enum.sort_by(field_adapters, & &1.number, :desc)
 
     ta =
@@ -382,14 +399,17 @@ defmodule Skir.Struct.Compiler do
         fields_desc,
         field_by_num,
         positions_tuple,
-        defaults
+        defaults,
+        meta
       )
 
     %Serializer{
       type_adapter: ta,
       module: module,
       name: module |> Module.split() |> List.last(),
-      qualified_name: inspect(module)
+      qualified_name: meta.qualified_name,
+      module_path: meta.module_path,
+      doc: meta.doc
     }
   end
 
@@ -399,17 +419,15 @@ defmodule Skir.Struct.Compiler do
         fields_desc,
         field_by_num,
         positions_tuple,
-        defaults
+        defaults,
+        meta
       ) do
     %TypeAdapter{
       is_default: fn
-        # A recursive field's default is the unresolved lazy sentinel; it is
-        # always "default" (an empty recursive struct).
         {:__lazy_default__, _mod} -> true
         v -> struct_is_default(v, field_adapters, defaults)
       end,
       to_json: fn
-        # Sentinel = empty struct: [] dense, {} readable.
         {:__lazy_default__, _mod}, :dense ->
           []
 
@@ -432,7 +450,6 @@ defmodule Skir.Struct.Compiler do
         )
       end,
       encode_binary: fn
-        # Sentinel = empty struct: 0xF6 (zero slots).
         {:__lazy_default__, _mod}, acc ->
           [acc, <<0xF6>>]
 
@@ -441,6 +458,9 @@ defmodule Skir.Struct.Compiler do
       end,
       decode_binary: fn bits, keep ->
         struct_decode_binary(bits, module, field_by_num, positions_tuple, defaults, keep)
+      end,
+      type_descriptor: fn ->
+        struct_type_descriptor(field_adapters, meta)
       end
     }
   end
@@ -473,31 +493,54 @@ defmodule Skir.Struct.Compiler do
   def type_adapter_for(mod) when is_atom(mod),
     do: mod.__skir_serializer__().type_adapter
 
-  #
   # Resolve a field's TypeAdapter. For a direct self-reference (recursive
-  # field whose type is the struct being built), return a LAZY adapter that
-  # resolves the serializer on first use — building it eagerly here would
-  # recurse forever (gleam's FieldSerializer.Lazy).
-  defp field_adapter_for(field_type, module) do
+  # field), return a LAZY adapter carrying the precomputed type_sig — building
+  # the adapter (or its type descriptor) eagerly would recurse forever.
+  defp field_adapter_for(field_type, module, self_id) do
     if recursive_self_ref?(field_type, module) do
-      lazy_type_adapter(module)
+      lazy_type_adapter(module, recursive_type_sig(field_type, self_id))
     else
       type_adapter_for(field_type)
     end
   end
 
-  # Direct self-reference: the field's type is the module itself, or an
-  # optional/array wrapping it.
   defp recursive_self_ref?(mod, module) when is_atom(mod), do: mod == module
   defp recursive_self_ref?({:optional, inner}, module), do: recursive_self_ref?(inner, module)
   defp recursive_self_ref?({:array, inner}, module), do: recursive_self_ref?(inner, module)
   defp recursive_self_ref?({:array, inner, _opts}, module), do: recursive_self_ref?(inner, module)
   defp recursive_self_ref?(_, _), do: false
 
-  # Lazy adapter: each closure resolves mod.__skir_serializer__() at call
-  # time. By the time a value is encoded/decoded the serializer is fully
-  # built and cached, so this resolves once and breaks the build-time cycle.
-  defp lazy_type_adapter(mod) do
+  # Build the TypeSignature for a recursive field structurally (without
+  # touching the inner adapter), so the type descriptor can reference the
+  # record by id instead of recursing into it.
+  defp recursive_type_sig(mod, self_id) when is_atom(mod), do: {:record, self_id}
+
+  defp recursive_type_sig({:optional, inner}, self_id),
+    do: {:optional, recursive_type_sig(inner, self_id)}
+
+  defp recursive_type_sig({:array, inner}, self_id),
+    do: {:array, recursive_type_sig(inner, self_id), ""}
+
+  defp recursive_type_sig({:array, inner, opts}, self_id) when is_list(opts) do
+    key =
+      case Keyword.get(opts, :key) do
+        nil -> ""
+        kf -> key_extractor_str(kf)
+      end
+
+    {:array, recursive_type_sig(inner, self_id), key}
+  end
+
+  # key path [:a, :b, :kind] -> "a.b.kind"; single atom :id -> "id".
+  defp key_extractor_str(kf) when is_atom(kf), do: Atom.to_string(kf)
+  defp key_extractor_str(kf) when is_list(kf), do: Enum.map_join(kf, ".", &Atom.to_string/1)
+
+  # Lazy adapter for a recursive field. The 5 serialization closures resolve
+  # mod.__skir_serializer__() at call time (breaking the build cycle). The
+  # type_descriptor closure returns ONLY the precomputed type_sig with empty
+  # records — it does NOT descend into the recursive serializer, which would
+  # loop forever (gleam: Lazy field_adapter returns records: dict.new()).
+  defp lazy_type_adapter(mod, type_sig) do
     %TypeAdapter{
       is_default: fn v -> mod.__skir_serializer__().type_adapter.is_default.(v) end,
       to_json: fn v, flavor -> mod.__skir_serializer__().type_adapter.to_json.(v, flavor) end,
@@ -509,7 +552,8 @@ defmodule Skir.Struct.Compiler do
       end,
       decode_binary: fn bits, keep ->
         mod.__skir_serializer__().type_adapter.decode_binary.(bits, keep)
-      end
+      end,
+      type_descriptor: fn -> %Skir.TypeDescriptor{type_sig: type_sig, records: %{}} end
     }
   end
 
@@ -850,5 +894,42 @@ defmodule Skir.Struct.Compiler do
       {:error, _} = err ->
         err
     end
+  end
+
+  # type descriptor
+
+  # Build the TypeDescriptor for this struct: a Record(id) type signature plus
+  # the transitive closure of all referenced record definitions (own + fields),
+  # deduplicated by id. Mirrors gleam struct_serializer new_serializer's
+  # type_descriptor closure.
+  defp struct_type_descriptor(field_adapters, meta) do
+    id = meta.module_path <> ":" <> meta.qualified_name
+
+    field_tds = Enum.map(field_adapters, fn f -> {f, f.adapter.type_descriptor.()} end)
+
+    fields =
+      Enum.map(field_tds, fn {f, ftd} ->
+        %StructField{
+          name: Atom.to_string(f.name),
+          number: f.number,
+          field_type: ftd.type_sig,
+          doc: f.doc || ""
+        }
+      end)
+
+    # Merge all field records, then insert this struct's own descriptor.
+    all_records =
+      Enum.reduce(field_tds, %{}, fn {_f, ftd}, acc -> Map.merge(acc, ftd.records) end)
+
+    sd = %StructDescriptor{
+      name: meta.qualified_name |> String.split(".") |> List.last(),
+      qualified_name: meta.qualified_name,
+      module_path: meta.module_path,
+      doc: meta.doc || "",
+      removed_numbers: meta.removed,
+      fields: fields
+    }
+
+    %TypeDescriptor{type_sig: {:record, id}, records: Map.put(all_records, id, {:struct, sd})}
   end
 end
