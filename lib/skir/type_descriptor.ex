@@ -12,6 +12,8 @@ end
 
 defmodule Skir.TypeDescriptor.StructDescriptor do
   @moduledoc false
+  alias Skir.TypeDescriptor.StructField
+
   defstruct [:name, :qualified_name, :module_path, doc: "", removed_numbers: [], fields: []]
 
   @type t :: %__MODULE__{
