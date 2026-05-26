@@ -10,41 +10,41 @@ defmodule Skir.MethodTest do
   end
 
   describe "DSL — generated functions" do
-    test "generates one *_method/0 per declaration" do
-      assert function_exported?(Methods, :square_method, 0)
-      assert function_exported?(Methods, :get_user_method, 0)
-      assert function_exported?(Methods, :list_pets_method, 0)
+    test "generates one method per declaration" do
+      assert function_exported?(Methods, :square, 0)
+      assert function_exported?(Methods, :get_user, 0)
+      assert function_exported?(Methods, :list_pets, 0)
     end
 
     test "function returns %Skir.Method{}" do
-      assert %Skir.Method{} = Methods.square_method()
+      assert %Skir.Method{} = Methods.square()
     end
   end
 
   describe "Method record fields" do
     test "name is PascalCase of declared atom" do
-      assert Methods.square_method().name == "Square"
-      assert Methods.get_user_method().name == "GetUser"
-      assert Methods.list_pets_method().name == "ListPets"
+      assert Methods.square().name == "Square"
+      assert Methods.get_user().name == "GetUser"
+      assert Methods.list_pets().name == "ListPets"
     end
 
     test "number matches declaration" do
-      assert Methods.square_method().number == 1001
-      assert Methods.get_user_method().number == 1002
+      assert Methods.square().number == 1001
+      assert Methods.get_user().number == 1002
     end
 
     test "doc is set when provided, empty when not" do
-      assert Methods.get_user_method().doc == "Lookup a user"
-      assert Methods.square_method().doc == ""
+      assert Methods.get_user().doc == "Lookup a user"
+      assert Methods.square().doc == ""
     end
 
     test "request_serializer is a %Skir.Serializer{}" do
-      m = Methods.square_method()
+      m = Methods.square()
       assert %Skir.Serializer{} = m.request_serializer
     end
 
     test "response_serializer is a %Skir.Serializer{}" do
-      m = Methods.square_method()
+      m = Methods.square()
       assert %Skir.Serializer{} = m.response_serializer
     end
   end
@@ -97,7 +97,7 @@ defmodule Skir.MethodTest do
 
   describe "Serializer round-trip via method record" do
     test "request_serializer encodes and decodes float32" do
-      m = Methods.square_method()
+      m = Methods.square()
       json = Skir.Serializer.encode_json(m.request_serializer, 3.14, :dense)
       assert json == "3.14"
 
@@ -106,7 +106,7 @@ defmodule Skir.MethodTest do
     end
 
     test "response_serializer for {:array, :string}" do
-      m = Methods.list_pets_method()
+      m = Methods.list_pets()
       json = Skir.Serializer.encode_json(m.response_serializer, ["a", "b"], :dense)
       assert json == ~s(["a","b"])
 

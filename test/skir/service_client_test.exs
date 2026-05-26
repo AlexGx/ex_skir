@@ -12,8 +12,8 @@ defmodule Skir.ServiceClientTest do
 
   defp build_service do
     Service.new()
-    |> Service.add_method(Methods.double_method(), fn n, _ -> {:ok, n * 2} end)
-    |> Service.add_method(Methods.concat_method(), fn s, _ -> {:ok, s <> s} end)
+    |> Service.add_method(Methods.double(), fn n, _ -> {:ok, n * 2} end)
+    |> Service.add_method(Methods.concat(), fn s, _ -> {:ok, s <> s} end)
   end
 
   defp in_process_send(service) do
@@ -79,7 +79,7 @@ defmodule Skir.ServiceClientTest do
       end
 
       client = ServiceClient.new("http://x", send_fn: send_fn)
-      ServiceClient.invoke(client, Methods.double_method(), 7)
+      ServiceClient.invoke(client, Methods.double(), 7)
 
       [{:body, body}] = :ets.lookup(received, :body)
       assert body == "Double:1::7"
@@ -97,7 +97,7 @@ defmodule Skir.ServiceClientTest do
       end
 
       client = ServiceClient.new("http://x", send_fn: send_fn)
-      ServiceClient.invoke(client, Methods.double_method(), 1)
+      ServiceClient.invoke(client, Methods.double(), 1)
 
       [{:request, req}] = :ets.lookup(received, :request)
       assert req.method == :post
@@ -122,7 +122,7 @@ defmodule Skir.ServiceClientTest do
         ServiceClient.new("http://x", send_fn: send_fn)
         |> ServiceClient.with_default_header("Authorization", "Bearer xyz")
 
-      ServiceClient.invoke(client, Methods.double_method(), 1)
+      ServiceClient.invoke(client, Methods.double(), 1)
 
       [{:headers, headers}] = :ets.lookup(received, :headers)
       assert Enum.any?(headers, fn {k, v} -> k == "Authorization" and v == "Bearer xyz" end)
@@ -136,14 +136,14 @@ defmodule Skir.ServiceClientTest do
       svc = build_service()
       client = ServiceClient.new("http://x", send_fn: in_process_send(svc))
 
-      assert {:ok, 14} = ServiceClient.invoke(client, Methods.double_method(), 7)
+      assert {:ok, 14} = ServiceClient.invoke(client, Methods.double(), 7)
     end
 
     test "string round-trip" do
       svc = build_service()
       client = ServiceClient.new("http://x", send_fn: in_process_send(svc))
 
-      assert {:ok, "abab"} = ServiceClient.invoke(client, Methods.concat_method(), "ab")
+      assert {:ok, "abab"} = ServiceClient.invoke(client, Methods.concat(), "ab")
     end
   end
 
@@ -161,7 +161,7 @@ defmodule Skir.ServiceClientTest do
       client = ServiceClient.new("http://x", send_fn: send_fn)
 
       assert {:error, %RpcError{status_code: 404, message: "method not found"}} =
-               ServiceClient.invoke(client, Methods.double_method(), 1)
+               ServiceClient.invoke(client, Methods.double(), 1)
     end
 
     test "non-text/plain error response has empty message" do
@@ -177,7 +177,7 @@ defmodule Skir.ServiceClientTest do
       client = ServiceClient.new("http://x", send_fn: send_fn)
 
       assert {:error, %RpcError{status_code: 500, message: ""}} =
-               ServiceClient.invoke(client, Methods.double_method(), 1)
+               ServiceClient.invoke(client, Methods.double(), 1)
     end
 
     test "transport error returns status_code 0" do
@@ -185,20 +185,20 @@ defmodule Skir.ServiceClientTest do
       client = ServiceClient.new("http://x", send_fn: send_fn)
 
       assert {:error, %RpcError{status_code: 0}} =
-               ServiceClient.invoke(client, Methods.double_method(), 1)
+               ServiceClient.invoke(client, Methods.double(), 1)
     end
 
     test "service-level ServiceError flows through to client as RpcError" do
       svc =
         Service.new()
-        |> Service.add_method(Methods.double_method(), fn _, _ ->
+        |> Service.add_method(Methods.double(), fn _, _ ->
           {:error, %ServiceError{status: 403, message: "forbidden"}}
         end)
 
       client = ServiceClient.new("http://x", send_fn: in_process_send(svc))
 
       assert {:error, %RpcError{status_code: 403, message: "forbidden"}} =
-               ServiceClient.invoke(client, Methods.double_method(), 1)
+               ServiceClient.invoke(client, Methods.double(), 1)
     end
   end
 end

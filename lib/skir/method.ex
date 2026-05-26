@@ -50,11 +50,8 @@ defmodule Skir.Methods do
   After `use`, the macro generates one zero-arity function per method
   that returns a `%Skir.Method{}`:
 
-      SkirOut.Schema.Methods.square_method()
+      SkirOut.Schema.Methods.square()
       # => %Skir.Method{name: "Square", number: 1001, ...}
-
-  The generated function name is `<snake_name>_method` — `:square` becomes
-  `square_method/0`, `:get_user` becomes `get_user_method/0`.
 
   ## Naming
 
@@ -121,6 +118,9 @@ defmodule Skir.Methods do
     method_defs =
       Enum.map(methods, fn m ->
         # fn_name = String.to_atom("#{m.name}_method")
+
+        # raise CompileError, description: "#{inspect(m)}: debug"
+
         fn_name = String.to_atom("#{m.name}")
         wire_name = camelize(m.name)
         doc_text = method_doc(m, wire_name)

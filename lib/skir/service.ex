@@ -156,8 +156,8 @@ defmodule Skir.Service do
 
       service =
         Skir.Service.new()
-        |> Skir.Service.add_method(SkirOut.Schema.Methods.square_method(), &MyApp.Calc.square/2)
-        |> Skir.Service.add_method(SkirOut.Schema.Methods.sqrt_method(), &MyApp.Calc.sqrt/2)
+        |> Skir.Service.add_method(SkirOut.Schema.Methods.square(), &MyApp.Calc.square/2)
+        |> Skir.Service.add_method(SkirOut.Schema.Methods.sqrt(), &MyApp.Calc.sqrt/2)
 
       # In your HTTP handler:
       {response, _new_state} = Skir.Service.handle_request(service, body, meta, nil)
@@ -530,7 +530,9 @@ defmodule Skir.Service do
 
     add_calls =
       Enum.map(methods, fn m ->
-        method_fn = String.to_atom("#{m.name}_method")
+        # @review
+        # method_fn = String.to_atom("#{m.name}_method")
+        method_fn = String.to_atom("#{m.name}")
 
         quote do
           acc =

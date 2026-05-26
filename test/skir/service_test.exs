@@ -21,9 +21,9 @@ defmodule Skir.ServiceTest do
 
   defp build_service(opts \\ []) do
     Service.new(opts)
-    |> Service.add_method(TestMethods.square_method(), &square_h/2)
-    |> Service.add_method(TestMethods.greet_method(), &greet_h/2)
-    |> Service.add_method(TestMethods.crash_method(), &crash_h/2)
+    |> Service.add_method(TestMethods.square(), &square_h/2)
+    |> Service.add_method(TestMethods.greet(), &greet_h/2)
+    |> Service.add_method(TestMethods.crash(), &crash_h/2)
   end
 
   describe "new/1 and add_method/3" do
@@ -36,7 +36,7 @@ defmodule Skir.ServiceTest do
     test "add_method registers in both maps" do
       svc =
         Service.new()
-        |> Service.add_method(TestMethods.square_method(), &square_h/2)
+        |> Service.add_method(TestMethods.square(), &square_h/2)
 
       assert Map.has_key?(svc.by_name, "Square")
       assert Map.has_key?(svc.by_number, 1)
@@ -103,7 +103,7 @@ defmodule Skir.ServiceTest do
       svc =
         Service.new()
         |> Service.add_method(
-          TestMethods.greet_method(),
+          TestMethods.greet(),
           fn _request, _meta -> {:error, Skir.ServiceError.not_found("nope")} end
         )
 
@@ -237,7 +237,7 @@ defmodule Skir.ServiceTest do
 
       svc =
         Service.new()
-        |> Service.add_method(MetaMethods.echo_meta_method(), handler)
+        |> Service.add_method(MetaMethods.echo_meta(), handler)
 
       meta = %{user_id: 42, ip: "10.0.0.1"}
 

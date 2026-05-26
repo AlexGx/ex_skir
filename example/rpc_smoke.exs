@@ -77,13 +77,13 @@ end
 
 client = Skir.ServiceClient.new("http://fake/api", send_fn: fake_send)
 
-{:ok, squared} = Skir.ServiceClient.invoke(client, SkirRpcSmoke.Methods.square_method(), 7.0)
+{:ok, squared} = Skir.ServiceClient.invoke(client, SkirRpcSmoke.Methods.square(), 7.0)
 IO.puts("Square(7.0) → #{squared}")
 
-{:ok, greeting} = Skir.ServiceClient.invoke(client, SkirRpcSmoke.Methods.greet_method(), "Alex")
+{:ok, greeting} = Skir.ServiceClient.invoke(client, SkirRpcSmoke.Methods.greet(), "Alex")
 IO.puts("Greet(Alex) → #{greeting}")
 
-{:error, err} = Skir.ServiceClient.invoke(client, SkirRpcSmoke.Methods.greet_method(), "")
+{:error, err} = Skir.ServiceClient.invoke(client, SkirRpcSmoke.Methods.greet(), "")
 IO.puts("Greet('') → error status=#{err.status_code} msg=#{err.message}")
 
 IO.puts("\n=== Done ===")

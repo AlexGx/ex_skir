@@ -25,8 +25,7 @@ defmodule SkirOut.MethodsTest do
     * The `%Skir.Method{}` `:name` field is the PascalCase wire name
       (`"MyProcedure"`), produced by `Macro.camelize/1` from the declared atom.
     * A method declared `:true_` (the reserved word `true` gets a trailing
-      underscore from the generator) still produces wire name `"True"` and
-      accessor `true__method/0` (double underscore: `true_` + `_method`).
+      underscore from the generator) still produces wire name `"True"`.
   """
   use ExUnit.Case, async: true
 
@@ -54,16 +53,16 @@ defmodule SkirOut.MethodsTest do
 
   describe "with_explicit_number_method" do
     test "name" do
-      assert SkirOut.Methods.with_explicit_number_method().name ==
+      assert SkirOut.Methods.with_explicit_number().name ==
                "WithExplicitNumber"
     end
 
     test "number" do
-      assert SkirOut.Methods.with_explicit_number_method().number == 3
+      assert SkirOut.Methods.with_explicit_number().number == 3
     end
 
     test "doc defaults to empty string when not declared" do
-      assert SkirOut.Methods.with_explicit_number_method().doc == ""
+      assert SkirOut.Methods.with_explicit_number().doc == ""
     end
   end
 
@@ -73,11 +72,11 @@ defmodule SkirOut.MethodsTest do
 
   describe "true_ method" do
     test "name is True" do
-      assert SkirOut.Methods.true__method().name == "True"
+      assert SkirOut.Methods.true_().name == "True"
     end
 
     test "number" do
-      assert SkirOut.Methods.true__method().number == 78_901
+      assert SkirOut.Methods.true_().number == 78_901
     end
   end
 
