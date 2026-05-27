@@ -205,6 +205,8 @@ defmodule Skir.Struct do
           removed: unquote(Macro.escape(removed))
         }
       end
+
+      unquote(Skir.Struct.Codegen.generate(fields))
     end
   end
 
