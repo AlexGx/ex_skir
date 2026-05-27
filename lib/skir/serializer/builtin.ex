@@ -255,12 +255,24 @@ defmodule Skir.Serializer.Builtin do
         v, path, keep -> inner.decode_json.(v, path, keep)
       end,
       encode_binary: fn
-        nil, acc -> [acc, Primitive.encode_null()]
-        v, acc -> inner.encode_binary.(v, acc)
+        nil, acc -> [acc, <<0xFF>>]
+        v, acc -> inner.encode_binary.(v, [acc, <<0x01>>])
       end,
       decode_binary: fn
-        <<0xFF, r::bits>>, _keep -> {:ok, {nil, r}}
-        bits, keep -> inner.decode_binary.(bits, keep)
+        <<0x00, r::bits>>, _keep ->
+          {:ok, {nil, r}}
+
+        <<0xFF, r::bits>>, _keep ->
+          {:ok, {nil, r}}
+
+        <<0x01, r::bits>>, keep ->
+          inner.decode_binary.(r, keep)
+
+        <<b, _::bits>>, _keep ->
+          {:error, "unexpected optional tag: 0x#{Integer.to_string(b, 16)}"}
+
+        <<>>, _keep ->
+          {:error, "unexpected end of input"}
       end,
       type_descriptor: fn -> wrap_optional_td(inner) end
     }
