@@ -118,7 +118,7 @@ defmodule Skir.Serializer.Builtin do
         :nan, _ -> "NaN"
         :infinity, _ -> "Infinity"
         :neg_infinity, _ -> "-Infinity"
-        v, _ -> v
+        v, _ -> float_to_json_value(v)
       end,
       decode_json: fn
         f, _, _ when is_float(f) -> f
@@ -134,6 +134,15 @@ defmodule Skir.Serializer.Builtin do
       decode_binary: lift(dec),
       type_descriptor: fn -> primitive_td(name) end
     }
+  end
+
+  # experimental
+  defp float_to_json_value(v) when is_float(v) do
+    truncated = trunc(v)
+
+    if truncated == v do
+      truncated
+    end || v
   end
 
   defp float_default?(0), do: true
