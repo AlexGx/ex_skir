@@ -71,40 +71,7 @@ defmodule Skir.Struct do
 
       @__skir_stable_id__ unquote(stable_id)
 
-      # Defaults are stored as-is (with {:__lazy_default__, Module} sentinels
-      # for nested types) because the nested modules may not exist yet at
-      # compile time. We resolve the sentinels on first call and cache.
-      @__skir_defaults_raw__ unquote(Macro.escape(defaults))
-
       @__skir_fields_meta__ unquote(Macro.escape(fields))
-
-      def __skir_defaults__ do
-        key = {__MODULE__, :__skir_defaults__}
-
-        case :persistent_term.get(key, :__not_built__) do
-          :__not_built__ ->
-            resolved =
-              Map.new(@__skir_defaults_raw__, fn
-                {k, {:__lazy_default__, mod}} when mod == __MODULE__ ->
-                  # Recursive self-reference: leave the sentinel unresolved.
-                  # A recursive type has no finite eager default; materializing
-                  # it would loop forever. Treated as the field's default.
-                  {k, {:__lazy_default__, mod}}
-
-                {k, {:__lazy_default__, mod}} ->
-                  {k, mod.default()}
-
-                kv ->
-                  kv
-              end)
-
-            :persistent_term.put(key, resolved)
-            resolved
-
-          resolved ->
-            resolved
-        end
-      end
 
       # Constructors
 
@@ -117,12 +84,8 @@ defmodule Skir.Struct do
       @spec partial(unquote(Skir.Struct.TypeGen.partial_input_map_ast(fields))) :: t()
       def partial(fields \\ %{}) when is_map(fields) do
         wrapped = Skir.Struct.wrap_keyed_fields(fields, @__skir_fields_meta__)
-        struct(__MODULE__, Map.merge(__skir_defaults__(), wrapped))
+        struct(__MODULE__, Map.merge(__skir_defaults_map__(), wrapped))
       end
-
-      # @review: gleam/rust idiomatic, not elixir
-      @spec default() :: t()
-      def default, do: partial(%{})
 
       # @review: also not elixir idiomatic
       @spec merge(t(), map()) :: t()
