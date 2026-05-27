@@ -2,49 +2,41 @@ defmodule Skir.Struct.Codegen do
   @moduledoc false
   # Compile-time code generation for Skir structs.
   #
-  # Stage 1 — generate two pure check functions alongside the existing
-  # runtime-closure architecture (no behavior change yet):
+  # Each `gen_*/1` function returns a quoted AST spliced into the user's
+  # module via `__before_compile__`. The goal is to move runtime
+  # closure-based logic into specialised compile-time functions, eliminating
+  # `:persistent_term` lookups on the hot path.
   #
-  #   * `__skir_is_default__/1`     — is this value the all-defaults struct?
-  #   * `__skir_highest_non_default__/1` — smallest N such that emitting the
-  #                                       first N slots is sufficient.
+  # Stages so far:
   #
-  # These mirror the runtime `Compiler.struct_is_default` and
-  # `Compiler.highest_non_default` exactly, but as specialised functions
-  # generated at compile time. They will replace those runtime helpers in
-  # later stages; for now they exist in parallel and are validated against
-  # the runtime path by tests.
+  #   Stage 1 — pure check functions:
+  #     * `__skir_is_default__/1`
+  #     * `__skir_highest_non_default__/1`
+  #
+  #   Stage 2 — defaults without persistent_term:
+  #     * `default/0`              — returns a fully-materialised struct
+  #     * `__skir_defaults_map__/0` — returns the defaults as a map
+  #                                  (record-field sentinels resolved;
+  #                                  self-recursive sentinels preserved)
 
   @doc """
-  Generates the `__skir_is_default__/1` and `__skir_highest_non_default__/1`
-  functions for a struct module. Returns a quoted block to splice into the
-  module's body via `__before_compile__`.
+  Generates all codegen-managed functions for a struct module.
+  Returns a quoted block to splice into the module body via `__before_compile__`.
   """
   def generate(fields) do
-    is_default_ast = gen_is_default(fields)
-    highest_ast = gen_highest_non_default(fields)
-
     quote do
-      unquote(is_default_ast)
-      unquote(highest_ast)
+      unquote(gen_is_default(fields))
+      unquote(gen_highest_non_default(fields))
+      unquote(gen_default(fields))
+      unquote(gen_defaults_map(fields))
     end
   end
 
   # ===========================================================================
-  # __skir_is_default__/1
+  # Stage 1: __skir_is_default__/1
   # ===========================================================================
-  #
-  # Two heads:
-  #   1. struct with __skir_unrecognized__ set → not default (preserved data)
-  #   2. struct with all fields at default → true; else fall through to false
-  #
-  # Primitive fields are matched literally in the pattern. Composite/record
-  # fields can't be matched literally (their default needs a runtime check)
-  # so they're bound as variables and checked in a guard or `cond` body.
 
   defp gen_is_default(fields) do
-    # Partition fields into "primitive default checks fit in the pattern"
-    # vs "needs a runtime call".
     {pattern_fields, runtime_check_fields} =
       Enum.split_with(fields, fn f -> primitive_default_pattern?(f.type) end)
 
@@ -56,14 +48,11 @@ defmodule Skir.Struct.Codegen do
     pattern_pairs = [{:__skir_unrecognized__, nil} | pattern_pairs]
 
     if runtime_check_fields == [] do
-      # Pure pattern match — primitives only. The fastest path.
       quote do
         def __skir_is_default__(%__MODULE__{unquote_splicing(pattern_pairs)}), do: true
         def __skir_is_default__(_), do: false
       end
     else
-      # Mixed — primitives in pattern, composite/record checked in body.
-      # Bind composite fields to variables in the pattern, check via `and`.
       var_bindings =
         Enum.map(runtime_check_fields, fn f ->
           {f.name, Macro.var(f.name, __MODULE__)}
@@ -87,10 +76,6 @@ defmodule Skir.Struct.Codegen do
     end
   end
 
-  # Does this type have a literal pattern that exactly represents its default?
-  # Primitives and `nil`/`[]` for optional/array fit; record fields don't
-  # (their default is `mod.default()` which needs a runtime call), but the
-  # self-recursive sentinel `{:__lazy_default__, __MODULE__}` does.
   defp primitive_default_pattern?(:bool), do: true
   defp primitive_default_pattern?(:int32), do: true
   defp primitive_default_pattern?(:int64), do: true
@@ -102,8 +87,6 @@ defmodule Skir.Struct.Codegen do
   defp primitive_default_pattern?(:timestamp), do: true
   defp primitive_default_pattern?({:optional, _}), do: true
   defp primitive_default_pattern?({:array, _}), do: true
-  # Keyed array default is %KeyedList{items: []} — can be matched but
-  # plain [] (from default before wrap) can occur. Handle in body.
   defp primitive_default_pattern?({:array, _, _}), do: false
   defp primitive_default_pattern?(mod) when is_atom(mod), do: false
 
@@ -119,23 +102,13 @@ defmodule Skir.Struct.Codegen do
   defp primitive_default_pattern({:optional, _}), do: nil
   defp primitive_default_pattern({:array, _}), do: []
 
-  # Generates a body expression that's true when the variable holds the
-  # default value of the given type. Used for fields not in the pattern.
   defp non_pattern_is_default_check({:array, _, _}, var) do
-    # Keyed array — default is %KeyedList{items: []} or plain [].
     quote do
       unquote(var) == [] or match?(%Skir.KeyedList{items: []}, unquote(var))
     end
   end
 
   defp non_pattern_is_default_check(mod, var) when is_atom(mod) do
-    # Other-module struct/enum. Default is either the lazy sentinel
-    # (unresolved recursive self-ref) or `mod.default()` materialised.
-    # Match sentinel literally; otherwise call the module's
-    # `__skir_is_default__/1` (or fall back to equality if not yet generated).
-    #
-    # NOTE: We rely on the referenced module being a Skir struct/enum
-    # that implements `__skir_is_default__/1`. If not — falls back to ==.
     quote do
       case unquote(var) do
         {:__lazy_default__, _} ->
@@ -152,29 +125,21 @@ defmodule Skir.Struct.Codegen do
   end
 
   # ===========================================================================
-  # __skir_highest_non_default__/1
+  # Stage 1: __skir_highest_non_default__/1
   # ===========================================================================
-  #
-  # Returns the smallest N such that emitting slots 0..N-1 is sufficient:
-  #   * if __skir_unrecognized__ is set → total_slots (emit everything)
-  #   * else: walk fields in descending number order, return (first
-  #     non-default field).number + 1
-  #   * else: 0 (all fields at default)
 
   defp gen_highest_non_default(fields) do
     fields_desc = Enum.sort_by(fields, & &1.number, :desc)
     max_field_num = fields |> Enum.map(& &1.number) |> Enum.max(fn -> -1 end)
     total_slots = max_field_num + 1
 
-    # One `cond` clause per field — guard-style `field_var != default`
-    # expressed as a runtime check (works for any type, including records).
-    cond_clauses = build_cond_clauses(fields_desc)
-
     if fields == [] do
       quote do
         def __skir_highest_non_default__(_), do: 0
       end
     else
+      cond_clauses = build_cond_clauses(fields_desc)
+
       quote do
         def __skir_highest_non_default__(%__MODULE__{__skir_unrecognized__: u})
             when not is_nil(u) do
@@ -192,8 +157,6 @@ defmodule Skir.Struct.Codegen do
     end
   end
 
-  # Builds the AST list of `condition -> value` pairs for a `cond`. The
-  # final clause is `true -> 0` so the cond is total.
   defp build_cond_clauses(fields_desc) do
     field_clauses =
       Enum.map(fields_desc, fn f ->
@@ -210,8 +173,6 @@ defmodule Skir.Struct.Codegen do
         true -> 0
       end
 
-    # Flatten — each `quote do ... -> ... end` is a `[->]` list, we want
-    # all clauses concatenated into the cond body.
     Enum.flat_map(field_clauses ++ [fallback], fn ast ->
       case ast do
         {:->, _, _} = single -> [single]
@@ -221,7 +182,6 @@ defmodule Skir.Struct.Codegen do
     end)
   end
 
-  # AST for "this field value is NOT the default" for the given type.
   defp non_default_check_for_var(:bool, var), do: quote(do: unquote(var) != false)
   defp non_default_check_for_var(:int32, var), do: quote(do: unquote(var) != 0)
   defp non_default_check_for_var(:int64, var), do: quote(do: unquote(var) != 0)
@@ -252,9 +212,6 @@ defmodule Skir.Struct.Codegen do
   end
 
   defp non_default_check_for_var(mod, var) when is_atom(mod) do
-    # Record field: not default = (not the sentinel) AND (not is_default per mod).
-    # We do the runtime call. `function_exported?` check guards against
-    # forward-ref oddities at first compile pass.
     quote do
       case unquote(var) do
         {:__lazy_default__, _} ->
@@ -266,6 +223,86 @@ defmodule Skir.Struct.Codegen do
           else
             v != unquote(mod).default()
           end
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Stage 2: default/0
+  # ===========================================================================
+  #
+  # Returns a fully-materialised struct with each field at its default.
+  # For self-recursive fields the {:__lazy_default__, __MODULE__} sentinel
+  # is preserved (materialising it would loop forever).
+
+  defp gen_default(fields) do
+    field_pairs =
+      Enum.map(fields, fn f ->
+        {f.name, default_value_ast(f.type)}
+      end)
+
+    quote do
+      def default do
+        %__MODULE__{unquote_splicing(field_pairs)}
+      end
+    end
+  end
+
+  defp default_value_ast(:bool), do: false
+  defp default_value_ast(:int32), do: 0
+  defp default_value_ast(:int64), do: 0
+  defp default_value_ast(:hash64), do: 0
+  defp default_value_ast(:float32), do: 0.0
+  defp default_value_ast(:float64), do: 0.0
+  defp default_value_ast(:string), do: ""
+  defp default_value_ast(:bytes), do: ""
+
+  defp default_value_ast(:timestamp), do: quote(do: ~U[1970-01-01 00:00:00.000Z])
+
+  defp default_value_ast({:optional, _}), do: nil
+  defp default_value_ast({:array, _}), do: []
+
+  defp default_value_ast({:array, _inner, opts}) when is_list(opts) do
+    case Keyword.get(opts, :key) do
+      nil ->
+        []
+
+      key_field ->
+        quote do
+          Skir.KeyedList.empty(unquote(key_field))
+        end
+    end
+  end
+
+  defp default_value_ast(mod) when is_atom(mod) do
+    # Reference to another Skir struct/enum. Self-recursive (mod == __MODULE__)
+    # keeps the sentinel; other modules materialise via `Mod.default()`.
+    quote do
+      if unquote(mod) == __MODULE__ do
+        {:__lazy_default__, __MODULE__}
+      else
+        unquote(mod).default()
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Stage 2: __skir_defaults_map__/0
+  # ===========================================================================
+  #
+  # Returns the defaults as a plain map (NOT a struct). Used by Compiler's
+  # runtime closures for decode_json / decode_binary which build a fields-map
+  # before constructing the struct.
+
+  defp gen_defaults_map(fields) do
+    field_pairs =
+      Enum.map(fields, fn f ->
+        {f.name, default_value_ast(f.type)}
+      end)
+
+    quote do
+      def __skir_defaults_map__ do
+        %{unquote_splicing(field_pairs)}
       end
     end
   end
