@@ -73,6 +73,8 @@ defmodule Skir.Struct do
 
       @__skir_fields_meta__ unquote(Macro.escape(fields))
 
+      unquote(Skir.Struct.Codegen.generate(fields))
+
       # Constructors
 
       # @review: deprecate in flavor of elixir native struct
@@ -168,8 +170,6 @@ defmodule Skir.Struct do
           removed: unquote(Macro.escape(removed))
         }
       end
-
-      unquote(Skir.Struct.Codegen.generate(fields))
     end
   end
 
