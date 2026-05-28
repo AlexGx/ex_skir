@@ -11,13 +11,9 @@ defmodule Skir do
     * `Skir.TypeAdapter` - the central encode/decode record (per type)
   """
 
-  alias Skir.Serializer
-
   @doc "Polymorphic encode to binary. Dispatches on `__struct__`."
-  def encode_binary(%mod{} = value),
-    do: Serializer.encode_binary(mod.__skir_serializer__(), value)
+  def encode_binary(%mod{} = value), do: mod.to_binary(value)
 
   @doc "Polymorphic encode to JSON."
-  def encode_json(%mod{} = value, flavor \\ :dense),
-    do: Serializer.encode_json(mod.__skir_serializer__(), value, flavor)
+  def encode_json(%mod{} = value, flavor \\ :dense), do: mod.to_json(value, flavor)
 end
