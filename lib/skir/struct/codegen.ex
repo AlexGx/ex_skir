@@ -8,6 +8,7 @@ defmodule Skir.Struct.Codegen do
   #   Stage 3 — __skir_encode_binary__/2            (generated alongside;
   #             to_binary/1 not switched until diff-tested)
 
+
   @doc """
   Generates all codegen-managed functions for a struct module.
   Returns a quoted block to splice into the module body via `__before_compile__`.
@@ -19,6 +20,7 @@ defmodule Skir.Struct.Codegen do
       unquote(gen_default(fields))
       unquote(gen_defaults_map(fields))
       unquote(gen_encode_binary(fields))
+      unquote(gen_decode_binary(fields))
     end
   end
 
@@ -362,5 +364,167 @@ defmodule Skir.Struct.Codegen do
   defp encode_slot_ast({:field, f}, value_ast) do
     field_access = quote(do: unquote(value_ast).unquote(Macro.var(f.name, nil)))
     Skir.Struct.TypeResolver.encode_binary_ast(f.type, field_access)
+  end
+
+  # ===========================================================================
+  # Stage 4: __skir_decode_binary__/2  (approach B — unrolled chain)
+  # ===========================================================================
+  #
+  # Generated alongside the existing runtime path (from_binary still routes
+  # through Compiler closures until diff-tested). Mirrors
+  # Compiler.struct_decode_binary:
+  #
+  #   1. decode_slot_count -> {count, rest}
+  #   2. slots_to_fill = min(count, recognized)
+  #   3. chain __skir_decode_s0__ .. __skir_decode_sN__ threads `remaining`,
+  #      decoding/skipping each slot, accumulating into the defaults map
+  #   4. __skir_finish_decode__ handles extra slots (keep: capture, drop: skip)
+  #
+  # Each chain function has a `remaining <= 0` guard clause that stops early
+  # (when count < recognized) returning the accumulated map + rest.
+
+  defp gen_decode_binary(fields) do
+    positions = build_position_list(fields)
+    recognized = length(positions)
+
+    if recognized == 0 do
+      # No fields: empty struct. Just read the header and finish.
+      quote do
+        def __skir_decode_binary__(bits, keep) do
+          case Skir.Wire.Struct.decode_slot_count(bits) do
+            {:ok, {count, rest}} ->
+              __skir_finish_decode__(count, rest, __skir_defaults_map__(), count, keep)
+
+            {:error, _} = err ->
+              err
+          end
+        end
+      end
+      |> wrap_with_finish()
+    else
+      chain = gen_decode_chain(positions, recognized)
+
+      main =
+        quote do
+          def __skir_decode_binary__(bits, keep) do
+            case Skir.Wire.Struct.decode_slot_count(bits) do
+              {:ok, {count, rest}} ->
+                slots_to_fill = min(count, unquote(recognized))
+
+                case __skir_decode_s0__(rest, slots_to_fill, __skir_defaults_map__(), keep) do
+                  {:ok, {acc, after_recognized}} ->
+                    extra = count - slots_to_fill
+                    __skir_finish_decode__(extra, after_recognized, acc, count, keep)
+
+                  {:error, _} = err ->
+                    err
+                end
+
+              {:error, _} = err ->
+                err
+            end
+          end
+        end
+
+      quote do
+        unquote(main)
+        unquote_splicing(chain)
+        unquote(gen_finish_decode())
+      end
+    end
+  end
+
+  # For the no-fields case, just emit the finish helper alongside.
+  defp wrap_with_finish(main_ast) do
+    quote do
+      unquote(main_ast)
+      unquote(gen_finish_decode())
+    end
+  end
+
+  # Generates the chain functions __skir_decode_s0__ .. __skir_decode_s{N-1}__.
+  # Each: guard `remaining <= 0` -> stop; else decode/skip its slot, recurse
+  # to next (or, for the last slot, return the result directly).
+  defp gen_decode_chain(positions, recognized) do
+    for {pos, idx} <- Enum.with_index(positions) do
+      fn_name = :"__skir_decode_s#{idx}__"
+      is_last = idx == recognized - 1
+      next_name = :"__skir_decode_s#{idx + 1}__"
+
+      decode_body = decode_slot_body(pos, idx, is_last, next_name)
+
+      quote do
+        defp unquote(fn_name)(rest, remaining, acc, _keep) when remaining <= 0 do
+          {:ok, {acc, rest}}
+        end
+
+        defp unquote(fn_name)(rest, remaining, acc, keep) do
+          unquote(decode_body)
+        end
+      end
+    end
+  end
+
+  # Body of one chain function: decode (or skip) this slot, then continue.
+  defp decode_slot_body(:removed, _idx, is_last, next_name) do
+    continue =
+      if is_last do
+        quote(do: {:ok, {acc, r1}})
+      else
+        quote(do: unquote(next_name)(r1, remaining - 1, acc, keep))
+      end
+
+    quote do
+      case Skir.Wire.Skip.skip_value(rest) do
+        {:ok, r1} -> unquote(continue)
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp decode_slot_body({:field, f}, _idx, is_last, next_name) do
+    decode_ast = Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
+    field_name = f.name
+
+    continue =
+      if is_last do
+        quote(do: {:ok, {Map.put(acc, unquote(field_name), v), r1}})
+      else
+        quote(do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep))
+      end
+
+    quote do
+      case unquote(decode_ast) do
+        {:ok, {v, r1}} -> unquote(continue)
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  # __skir_finish_decode__/5 — handle extra slots beyond recognized count.
+  defp gen_finish_decode do
+    quote do
+      defp __skir_finish_decode__(0, rest, acc, _count, _keep) do
+        {:ok, {struct(__MODULE__, acc), rest}}
+      end
+
+      defp __skir_finish_decode__(extra, rest, acc, count, :keep) do
+        case Skir.Wire.Skip.capture_n_values(extra, rest) do
+          {:ok, {captured, final_rest}} ->
+            unrec = %Skir.Unrecognized{format: :binary, data: captured, array_len: count}
+            {:ok, {struct(__MODULE__, Map.put(acc, :__skir_unrecognized__, unrec)), final_rest}}
+
+          {:error, _} = err ->
+            err
+        end
+      end
+
+      defp __skir_finish_decode__(extra, rest, acc, _count, :drop) do
+        case Skir.Wire.Skip.skip_n_values(extra, rest) do
+          {:ok, final_rest} -> {:ok, {struct(__MODULE__, acc), final_rest}}
+          {:error, _} = err -> err
+        end
+      end
+    end
   end
 end

@@ -120,6 +120,100 @@ defmodule Skir.Struct.TypeResolver do
   end
 
   # ===========================================================================
+  # decode_binary_ast/2
+  # ===========================================================================
+  #
+  # Returns AST evaluating to `{:ok, {value, rest}}` | `{:error, reason}`,
+  # given a quoted `bits_ast` (the remaining input) and `keep_ast` (the
+  # :keep | :drop flag). Mirrors the runtime Builtin decoders.
+  #
+  # Primitives ignore keep. Composite/record types thread keep through.
+
+  # --- primitives → direct Wire calls (1-arg, keep ignored) ---
+
+  def decode_binary_ast(:bool, bits_ast, _keep),
+    do: quote(do: Primitive.decode_bool(unquote(bits_ast)))
+
+  def decode_binary_ast(:int32, bits_ast, _keep),
+    do: quote(do: Number.decode_int32(unquote(bits_ast)))
+
+  def decode_binary_ast(:int64, bits_ast, _keep),
+    do: quote(do: Number.decode_int64(unquote(bits_ast)))
+
+  def decode_binary_ast(:hash64, bits_ast, _keep),
+    do: quote(do: Number.decode_hash64(unquote(bits_ast)))
+
+  def decode_binary_ast(:float32, bits_ast, _keep),
+    do: quote(do: Primitive.decode_float32(unquote(bits_ast)))
+
+  def decode_binary_ast(:float64, bits_ast, _keep),
+    do: quote(do: Primitive.decode_float64(unquote(bits_ast)))
+
+  def decode_binary_ast(:string, bits_ast, _keep),
+    do: quote(do: Primitive.decode_string(unquote(bits_ast)))
+
+  def decode_binary_ast(:bytes, bits_ast, _keep),
+    do: quote(do: Primitive.decode_bytes(unquote(bits_ast)))
+
+  def decode_binary_ast(:timestamp, bits_ast, _keep),
+    do: quote(do: Primitive.decode_timestamp(unquote(bits_ast)))
+
+  # --- optional(T): 0x00/0xFF -> nil; 0x01 -> inner decode ---
+
+  def decode_binary_ast({:optional, inner}, bits_ast, keep_ast) do
+    inner_decode = decode_binary_ast(inner, quote(do: r), keep_ast)
+
+    quote do
+      case unquote(bits_ast) do
+        <<0x00, r::bits>> -> {:ok, {nil, r}}
+        <<0xFF, r::bits>> -> {:ok, {nil, r}}
+        <<0x01, r::bits>> -> unquote(inner_decode)
+        <<b, _::bits>> -> {:error, "unexpected optional tag: 0x" <> Integer.to_string(b, 16)}
+        <<>> -> {:error, "unexpected end of input"}
+      end
+    end
+  end
+
+  # --- array(T): decode header + N items via runtime helper ---
+
+  def decode_binary_ast({:array, inner}, bits_ast, keep_ast) do
+    # We pass a decoder closure to the runtime helper. The closure wraps the
+    # inner type's decode AST. This is the one place we use a closure in the
+    # generated decode path; arrays are inherently variable-length so a
+    # runtime loop is needed regardless.
+    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+
+    quote do
+      Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast))
+    end
+  end
+
+  # --- keyed array(T, key): same, then wrap in KeyedList ---
+
+  def decode_binary_ast({:array, inner, opts}, bits_ast, keep_ast) when is_list(opts) do
+    key_field = Keyword.get(opts, :key)
+    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+
+    quote do
+      case Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast)) do
+        {:ok, {items, rest}} ->
+          {:ok, {Skir.KeyedList.new(items, unquote(key_field)), rest}}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  # --- record (other module or self-recursive) ---
+
+  def decode_binary_ast(mod, bits_ast, keep_ast) when is_atom(mod) do
+    quote do
+      unquote(mod).__skir_decode_binary__(unquote(bits_ast), unquote(keep_ast))
+    end
+  end
+
+  # ===========================================================================
   # Runtime helpers (called from generated code)
   # ===========================================================================
 
@@ -132,4 +226,35 @@ defmodule Skir.Struct.TypeResolver do
   def array_header(2), do: <<0xF8>>
   def array_header(3), do: <<0xF9>>
   def array_header(n) when n > 3, do: [0xFA, Number.encode_uint32(n)]
+
+  @doc """
+  Decode an array given a 2-arg item decoder `fn bits, keep -> {:ok, {v, rest}} | {:error, _}`.
+  Returns `{:ok, {items_list, rest}}` | `{:error, reason}`. Same wire as Builtin.decode_array.
+  """
+  def decode_array(<<0x00, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
+  def decode_array(<<0xF6, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
+  def decode_array(<<0xF7, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 1, [], keep)
+  def decode_array(<<0xF8, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 2, [], keep)
+  def decode_array(<<0xF9, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 3, [], keep)
+
+  def decode_array(<<0xFA, r::bits>>, decoder, keep) do
+    case Number.decode_uint32(r) do
+      {:ok, {n, r2}} -> decode_array_items(r2, decoder, n, [], keep)
+      {:error, _} = err -> err
+    end
+  end
+
+  def decode_array(<<b, _::bits>>, _, _),
+    do: {:error, "unexpected array header: 0x" <> Integer.to_string(b, 16)}
+
+  def decode_array(<<>>, _, _), do: {:error, "unexpected end of input"}
+
+  defp decode_array_items(bits, _decoder, 0, acc, _keep), do: {:ok, {Enum.reverse(acc), bits}}
+
+  defp decode_array_items(bits, decoder, n, acc, keep) do
+    case decoder.(bits, keep) do
+      {:ok, {v, rest}} -> decode_array_items(rest, decoder, n - 1, [v | acc], keep)
+      {:error, _} = err -> err
+    end
+  end
 end

@@ -136,7 +136,7 @@ defmodule Skir.Serializer.Builtin do
     }
   end
 
-  # experimental
+  # @review: experimental
   defp float_to_json_value(v) when is_float(v) do
     truncated = trunc(v)
 
