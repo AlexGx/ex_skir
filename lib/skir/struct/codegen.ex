@@ -2,22 +2,11 @@ defmodule Skir.Struct.Codegen do
   @moduledoc false
   # Compile-time code generation for Skir structs.
   #
-  # Each `gen_*/1` function returns a quoted AST spliced into the user's
-  # module via `__before_compile__`. The goal is to move runtime
-  # closure-based logic into specialised compile-time functions, eliminating
-  # `:persistent_term` lookups on the hot path.
-  #
-  # Stages so far:
-  #
-  #   Stage 1 — pure check functions:
-  #     * `__skir_is_default__/1`
-  #     * `__skir_highest_non_default__/1`
-  #
-  #   Stage 2 — defaults without persistent_term:
-  #     * `default/0`              — returns a fully-materialised struct
-  #     * `__skir_defaults_map__/0` — returns the defaults as a map
-  #                                  (record-field sentinels resolved;
-  #                                  self-recursive sentinels preserved)
+  # Stages:
+  #   Stage 1 — __skir_is_default__/1, __skir_highest_non_default__/1
+  #   Stage 2 — default/0, __skir_defaults_map__/0  (no persistent_term)
+  #   Stage 3 — __skir_encode_binary__/2            (generated alongside;
+  #             to_binary/1 not switched until diff-tested)
 
   @doc """
   Generates all codegen-managed functions for a struct module.
@@ -29,6 +18,7 @@ defmodule Skir.Struct.Codegen do
       unquote(gen_highest_non_default(fields))
       unquote(gen_default(fields))
       unquote(gen_defaults_map(fields))
+      unquote(gen_encode_binary(fields))
     end
   end
 
@@ -230,10 +220,6 @@ defmodule Skir.Struct.Codegen do
   # ===========================================================================
   # Stage 2: default/0
   # ===========================================================================
-  #
-  # Returns a fully-materialised struct with each field at its default.
-  # For self-recursive fields the {:__lazy_default__, __MODULE__} sentinel
-  # is preserved (materialising it would loop forever).
 
   defp gen_default(fields) do
     field_pairs =
@@ -275,8 +261,6 @@ defmodule Skir.Struct.Codegen do
   end
 
   defp default_value_ast(mod) when is_atom(mod) do
-    # Reference to another Skir struct/enum. Self-recursive (mod == __MODULE__)
-    # keeps the sentinel; other modules materialise via `Mod.default()`.
     quote do
       if unquote(mod) == __MODULE__ do
         {:__lazy_default__, __MODULE__}
@@ -289,10 +273,6 @@ defmodule Skir.Struct.Codegen do
   # ===========================================================================
   # Stage 2: __skir_defaults_map__/0
   # ===========================================================================
-  #
-  # Returns the defaults as a plain map (NOT a struct). Used by Compiler's
-  # runtime closures for decode_json / decode_binary which build a fields-map
-  # before constructing the struct.
 
   defp gen_defaults_map(fields) do
     field_pairs =
@@ -305,5 +285,82 @@ defmodule Skir.Struct.Codegen do
         %{unquote_splicing(field_pairs)}
       end
     end
+  end
+
+  # ===========================================================================
+  # Stage 3: __skir_encode_binary__/2
+  # ===========================================================================
+  #
+  # Generated alongside the existing runtime path (to_binary/1 still routes
+  # through the Compiler closures until diff-tested). Mirrors
+  # Compiler.struct_encode_binary byte-for-byte:
+  #
+  #   * preserved binary unrecognized -> emit all recognized slots + captured bytes
+  #   * normal -> emit highest_non_default slots
+  #
+  # Approach (D): build the full ordered list of encoded slots, then take the
+  # first `count`. Simple and robust; trailing-default slots are still encoded
+  # then dropped (optimise later if profiling shows it matters).
+
+  defp gen_encode_binary(fields) do
+    positions = build_position_list(fields)
+    v = Macro.var(:v, __MODULE__)
+
+    # AST that builds the full list of encoded slots for value `v`.
+    all_slots_ast =
+      Enum.map(positions, fn pos -> encode_slot_ast(pos, v) end)
+
+    quote do
+      def __skir_encode_binary__(
+            %__MODULE__{
+              __skir_unrecognized__: %Skir.Unrecognized{
+                format: :binary,
+                data: extra_bytes,
+                array_len: total
+              }
+            } = unquote(v),
+            acc
+          ) do
+        slots = unquote(all_slots_ast)
+        [acc, Skir.Wire.Struct.encode_slot_count(total), slots, extra_bytes]
+      end
+
+      def __skir_encode_binary__(%__MODULE__{} = unquote(v), acc) do
+        count = __skir_highest_non_default__(unquote(v))
+        slots = unquote(all_slots_ast)
+        [acc, Skir.Wire.Struct.encode_slot_count(count), Enum.take(slots, count)]
+      end
+
+      # Lazy-default sentinel (empty recursive struct) -> empty-struct header.
+      def __skir_encode_binary__({:__lazy_default__, _}, acc) do
+        [acc, <<0xF6>>]
+      end
+    end
+  end
+
+  # Build an ordered list of positions: [:removed | {:field, field_meta}],
+  # indexed 0..max_slot. nil-gaps that aren't fields are :removed slots.
+  defp build_position_list(fields) do
+    by_num = Map.new(fields, &{&1.number, &1})
+    max_field = fields |> Enum.map(& &1.number) |> Enum.max(fn -> -1 end)
+
+    if max_field < 0 do
+      []
+    else
+      for i <- 0..max_field do
+        case Map.get(by_num, i) do
+          nil -> :removed
+          f -> {:field, f}
+        end
+      end
+    end
+  end
+
+  # AST for encoding a single slot of the struct value (bound to `value_ast`).
+  defp encode_slot_ast(:removed, _value_ast), do: quote(do: <<0x00>>)
+
+  defp encode_slot_ast({:field, f}, value_ast) do
+    field_access = quote(do: unquote(value_ast).unquote(Macro.var(f.name, nil)))
+    Skir.Struct.TypeResolver.encode_binary_ast(f.type, field_access)
   end
 end
