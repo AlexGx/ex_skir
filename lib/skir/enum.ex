@@ -115,15 +115,25 @@ defmodule Skir.Enum do
     quote do
       @type t :: unquote(Skir.Enum.TypeGen.union_ast(variants))
 
-      @doc "Returns the default value for this enum (`:unknown`)."
-      @spec default() :: t()
-      def default, do: :unknown
-
       # Stored under non-accumulating names so they don't conflict with the
       # accumulator attributes used by the `variant`/`removed` macros above.
       @__skir_variants_resolved__ unquote(Macro.escape(variants))
       @__skir_removed_resolved__ unquote(Macro.escape(removed))
       @__skir_stable_id__ unquote(stable_id)
+
+      unquote(
+        Skir.Enum.Codegen.generate(
+          variants,
+          removed,
+          %{
+            module_path: Module.get_attribute(env.module, :__skir_module_path__) || "",
+            qualified_name:
+              Module.get_attribute(env.module, :__skir_qualified_name__) ||
+                env.module |> Module.split() |> List.last(),
+            doc: Module.get_attribute(env.module, :__skir_doc__) || ""
+          }
+        )
+      )
 
       def __skir_schema__ do
         %{
