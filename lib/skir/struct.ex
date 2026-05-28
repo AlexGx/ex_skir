@@ -147,7 +147,7 @@ defmodule Skir.Struct do
             end
 
           _ ->
-            # No magic prefix — try JSON (still via old serializer path until Stage 5).
+           # No magic prefix — try JSON.
             try do
               from_json!(bytes)
             rescue
@@ -233,26 +233,26 @@ defmodule Skir.Struct do
   defp optional?(%{type: {:array, _, _}}), do: true
   defp optional?(_), do: false
 
-  def default_for(:bool), do: false
-  def default_for(:int32), do: 0
-  def default_for(:int64), do: 0
-  def default_for(:hash64), do: 0
-  def default_for(:float32), do: 0.0
-  def default_for(:float64), do: 0.0
-  def default_for(:string), do: ""
-  def default_for(:bytes), do: ""
-  def default_for(:timestamp), do: ~U[1970-01-01 00:00:00.000Z]
-  def default_for({:optional, _}), do: nil
-  def default_for({:array, _}), do: []
+  # def default_for(:bool), do: false
+  # def default_for(:int32), do: 0
+  # def default_for(:int64), do: 0
+  # def default_for(:hash64), do: 0
+  # def default_for(:float32), do: 0.0
+  # def default_for(:float64), do: 0.0
+  # def default_for(:string), do: ""
+  # def default_for(:bytes), do: ""
+  # def default_for(:timestamp), do: ~U[1970-01-01 00:00:00.000Z]
+  # def default_for({:optional, _}), do: nil
+  # def default_for({:array, _}), do: []
 
-  def default_for({:array, _, opts}) when is_list(opts) do
-    case Keyword.get(opts, :key) do
-      nil -> []
-      key_field -> Skir.KeyedList.empty(key_field)
-    end
-  end
+  # def default_for({:array, _, opts}) when is_list(opts) do
+  #   case Keyword.get(opts, :key) do
+  #     nil -> []
+  #     key_field -> Skir.KeyedList.empty(key_field)
+  #   end
+  # end
 
-  def default_for(mod) when is_atom(mod), do: {:__lazy_default__, mod}
+  # def default_for(mod) when is_atom(mod), do: {:__lazy_default__, mod}
 
   @doc """
   For each keyed-list field in `fields_meta`, if the user passed a plain
