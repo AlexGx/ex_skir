@@ -105,7 +105,6 @@ defmodule Skir.Struct do
 
       # User-facing API
       @spec to_binary(t()) :: binary()
-      # def to_binary(value), do: Skir.Serializer.encode_binary(__skir_serializer__(), value)
       def to_binary(value), do: IO.iodata_to_binary(__skir_encode_binary__(value, ["skir"]))
 
       @spec to_json(t()) :: binary()
@@ -161,12 +160,6 @@ defmodule Skir.Struct do
             end
         end
       end
-
-      # @spec from_json(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
-      # def from_json(bin), do: Skir.Serializer.decode_json(__skir_serializer__(), bin)
-
-      # @spec from_json!(binary()) :: t()
-      # def from_json!(bin), do: Skir.Serializer.decode_json!(__skir_serializer__(), bin)
 
       def from_json(bin), do: from_json(bin, [])
 
@@ -315,8 +308,6 @@ end
 
 defmodule Skir.Struct.Compiler do
   @moduledoc false
-  # Build the runtime serializer for a struct. Heavy prep work happens once
-  # in build_serializer; closures capture the prepared state.
 
   alias Skir.Serializer
 

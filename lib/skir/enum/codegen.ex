@@ -2,7 +2,7 @@ defmodule Skir.Enum.Codegen do
   @moduledoc false
   # Compile-time code generation for Skir enums, mirroring Skir.Struct.Codegen.
   #
-  # Generates (no persistent_term, no closures):
+  # Generates:
   #   * default/0                    -> :unknown
   #   * __skir_is_default__/1        -> :unknown is default
   #   * __skir_encode_binary__/2

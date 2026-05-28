@@ -154,17 +154,17 @@ defmodule Skir.Methods do
     end
   end
 
-  @doc false
-  def __build_serializer__(type_expr) do
-    type_adapter = Skir.Struct.Compiler.type_adapter_for(type_expr)
+  # @doc false
+  # def __build_serializer__(type_expr) do
+  #   type_adapter = Skir.Struct.Compiler.type_adapter_for(type_expr)
 
-    %Skir.Serializer{
-      type_adapter: type_adapter,
-      module: nil,
-      name: inspect(type_expr),
-      qualified_name: inspect(type_expr)
-    }
-  end
+  #   %Skir.Serializer{
+  #     type_adapter: type_adapter,
+  #     module: nil,
+  #     name: inspect(type_expr),
+  #     qualified_name: inspect(type_expr)
+  #   }
+  # end
 
   # Builds @doc text for a generated `<name>_method/0` function.
   # If the user provided `doc:` in the schema, use it; otherwise generate
