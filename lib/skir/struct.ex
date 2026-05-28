@@ -521,8 +521,19 @@ defmodule Skir.Struct.Compiler do
     end
   end
 
-  def type_adapter_for(mod) when is_atom(mod),
-    do: mod.__skir_serializer__().type_adapter
+  def type_adapter_for(mod) when is_atom(mod) do
+    %Skir.TypeAdapter{
+      is_default: &mod.__skir_is_default__/1,
+      encode_binary: fn v, acc -> mod.__skir_encode_binary__(v, acc) end,
+      decode_binary: fn bits, keep -> mod.__skir_decode_binary__(bits, keep) end,
+      to_json: fn
+        v, :dense -> mod.__skir_to_dense_json__(v)
+        v, :readable -> mod.__skir_to_readable_json__(v)
+      end,
+      decode_json: fn term, path, keep -> mod.__skir_decode_json__(term, path, keep) end,
+      type_descriptor: fn -> mod.__skir_type_descriptor__() end
+    }
+  end
 
   # Resolve a field's TypeAdapter. For a direct self-reference (recursive
   # field), return a LAZY adapter carrying the precomputed type_sig — building

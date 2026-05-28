@@ -117,10 +117,6 @@ defmodule Skir.Methods do
 
     method_defs =
       Enum.map(methods, fn m ->
-        # fn_name = String.to_atom("#{m.name}_method")
-
-        # raise CompileError, description: "#{inspect(m)}: debug"
-
         fn_name = String.to_atom("#{m.name}")
         wire_name = camelize(m.name)
         doc_text = method_doc(m, wire_name)
