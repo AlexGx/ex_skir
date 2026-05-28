@@ -240,31 +240,6 @@ defmodule Skir.Struct do
   defp optional?(%{type: {:array, _, _}}), do: true
   defp optional?(_), do: false
 
-  defp max_num([], []), do: -1
-
-  defp max_num(fields, removed) do
-    fmax = fields |> Enum.map(& &1.number) |> Enum.max(fn -> -1 end)
-    rmax = Enum.max(removed, fn -> -1 end)
-    max(fmax, rmax)
-  end
-
-  defp build_positions(_fields, _removed, -1), do: []
-
-  defp build_positions(fields, removed, max) do
-    by_num = Map.new(fields, &{&1.number, &1})
-
-    for i <- 0..max//1 do
-      cond do
-        Map.has_key?(by_num, i) -> {:field, Map.fetch!(by_num, i)}
-        i in removed -> :removed
-      end
-    end
-  end
-
-  defp defaults_map(fields) do
-    Map.new(fields, fn f -> {f.name, default_for(f.type)} end)
-  end
-
   def default_for(:bool), do: false
   def default_for(:int32), do: 0
   def default_for(:int64), do: 0
