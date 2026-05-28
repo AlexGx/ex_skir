@@ -8,21 +8,24 @@ defmodule Skir.Struct.Codegen do
   #   Stage 3 — __skir_encode_binary__/2            (generated alongside;
   #             to_binary/1 not switched until diff-tested)
 
+
   @doc """
   Generates all codegen-managed functions for a struct module.
   `meta` carries module_path, qualified_name, doc, removed for the type descriptor.
   Returns a quoted block to splice into the module body via `__before_compile__`.
   """
   def generate(fields, meta) do
+    removed = Map.get(meta, :removed, [])
+
     quote do
       unquote(gen_is_default(fields))
       unquote(gen_highest_non_default(fields))
       unquote(gen_default(fields))
       unquote(gen_defaults_map(fields))
-      unquote(gen_encode_binary(fields))
-      unquote(gen_decode_binary(fields))
-      unquote(gen_to_json(fields))
-      unquote(gen_decode_json(fields))
+      unquote(gen_encode_binary(fields, removed))
+      unquote(gen_decode_binary(fields, removed))
+      unquote(gen_to_json(fields, removed))
+      unquote(gen_decode_json(fields, removed))
       unquote(gen_type_descriptor(fields, meta))
     end
   end
@@ -307,8 +310,8 @@ defmodule Skir.Struct.Codegen do
   # first `count`. Simple and robust; trailing-default slots are still encoded
   # then dropped (optimise later if profiling shows it matters).
 
-  defp gen_encode_binary(fields) do
-    positions = build_position_list(fields)
+  defp gen_encode_binary(fields, removed) do
+    positions = build_position_list(fields, removed)
     v = Macro.var(:v, __MODULE__)
 
     # AST that builds the full list of encoded slots for value `v`.
@@ -345,14 +348,16 @@ defmodule Skir.Struct.Codegen do
 
   # Build an ordered list of positions: [:removed | {:field, field_meta}],
   # indexed 0..max_slot. nil-gaps that aren't fields are :removed slots.
-  defp build_position_list(fields) do
+  defp build_position_list(fields, removed) do
     by_num = Map.new(fields, &{&1.number, &1})
     max_field = fields |> Enum.map(& &1.number) |> Enum.max(fn -> -1 end)
+    max_removed = Enum.max(removed, fn -> -1 end)
+    max_slot = max(max_field, max_removed)
 
-    if max_field < 0 do
+    if max_slot < 0 do
       []
     else
-      for i <- 0..max_field do
+      for i <- 0..max_slot do
         case Map.get(by_num, i) do
           nil -> :removed
           f -> {:field, f}
@@ -386,8 +391,8 @@ defmodule Skir.Struct.Codegen do
   # Each chain function has a `remaining <= 0` guard clause that stops early
   # (when count < recognized) returning the accumulated map + rest.
 
-  defp gen_decode_binary(fields) do
-    positions = build_position_list(fields)
+  defp gen_decode_binary(fields, removed) do
+    positions = build_position_list(fields, removed)
     recognized = length(positions)
 
     if recognized == 0 do
@@ -486,18 +491,14 @@ defmodule Skir.Struct.Codegen do
   end
 
   defp decode_slot_body({:field, f}, _idx, is_last, next_name) do
-    decode_ast =
-      Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
-
+    decode_ast = Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
     field_name = f.name
 
     continue =
       if is_last do
         quote(do: {:ok, {Map.put(acc, unquote(field_name), v), r1}})
       else
-        quote(
-          do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep)
-        )
+        quote(do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep))
       end
 
     quote do
@@ -541,9 +542,9 @@ defmodule Skir.Struct.Codegen do
 
   # --- to_json (dense + readable) ---
 
-  defp gen_to_json(fields) do
+  defp gen_to_json(fields, removed) do
     quote do
-      unquote(gen_to_dense_json(fields))
+      unquote(gen_to_dense_json(fields, removed))
       unquote(gen_to_readable_json(fields))
     end
   end
@@ -551,8 +552,8 @@ defmodule Skir.Struct.Codegen do
   # Dense JSON: array of slots, approach (D). Two branches:
   #   * preserved JSON tail -> all recognized slots + tail (no trim)
   #   * normal -> Enum.take(slots, highest_non_default)
-  defp gen_to_dense_json(fields) do
-    positions = build_position_list(fields)
+  defp gen_to_dense_json(fields, removed) do
+    positions = build_position_list(fields, removed)
     v = Macro.var(:v, __MODULE__)
 
     all_slots_ast =
@@ -668,15 +669,14 @@ defmodule Skir.Struct.Codegen do
 
   # --- decode_json (form dispatch: list | map | 0 | other) ---
 
-  defp gen_decode_json(fields) do
-    positions = build_position_list(fields)
+  defp gen_decode_json(fields, removed) do
+    positions = build_position_list(fields, removed)
     recognized = length(positions)
 
     # list form: dense array. index -> field decode.
     list_field_clauses =
       for {pos, idx} <- Enum.with_index(positions), match?({:field, _}, pos) do
         {:field, f} = pos
-
         decode_ast =
           Skir.Struct.TypeResolver.decode_json_ast(
             f.type,
@@ -706,7 +706,6 @@ defmodule Skir.Struct.Codegen do
     map_field_clauses =
       for {:field, f} <- positions do
         name_str = Atom.to_string(f.name)
-
         decode_ast =
           Skir.Struct.TypeResolver.decode_json_ast(
             f.type,
