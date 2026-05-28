@@ -136,15 +136,6 @@ defmodule Skir.Wire.Primitive do
     end
   end
 
-  def decode_timestamp(<<0x00, r::bits>>), do: {:ok, {@epoch, r}}
-
-  def decode_timestamp(<<0xEF, ms::64-signed-little, r::bits>>) do
-    case DateTime.from_unix(ms, :millisecond) do
-      {:ok, dt} -> {:ok, {dt, r}}
-      _ -> {:error, "timestamp out of range: #{ms}"}
-    end
-  end
-
   # Forward-compat: any numeric wire (int or float) decodes as timestamp millis.
   def decode_timestamp(bits) do
     case Skir.Wire.Number.decode_int64(bits) do
