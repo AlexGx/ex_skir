@@ -595,5 +595,20 @@ defmodule Skir.Enum.Codegen do
   defp default_payload_ast(:string), do: ""
   defp default_payload_ast(:bytes), do: ""
   defp default_payload_ast(:timestamp), do: quote(do: ~U[1970-01-01 00:00:00.000Z])
+
+  # Composite wraps types — default is nil/[] (compile-time literal).
+  defp default_payload_ast({:optional, _inner}), do: nil
+  defp default_payload_ast({:array, _inner}), do: []
+
+  defp default_payload_ast({:array, _inner, opts}) when is_list(opts) do
+    case Keyword.get(opts, :key) do
+      nil ->
+        []
+
+      key_field ->
+        quote(do: Skir.KeyedList.empty(unquote(key_field)))
+    end
+  end
+
   defp default_payload_ast(mod) when is_atom(mod), do: quote(do: unquote(mod).default())
 end
