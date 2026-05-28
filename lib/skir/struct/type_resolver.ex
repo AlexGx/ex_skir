@@ -181,10 +181,15 @@ defmodule Skir.Struct.TypeResolver do
     # inner type's decode AST. This is the one place we use a closure in the
     # generated decode path; arrays are inherently variable-length so a
     # runtime loop is needed regardless.
-    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+    item_decoder =
+      quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
 
     quote do
-      Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast))
+      Skir.Struct.TypeResolver.decode_array(
+        unquote(bits_ast),
+        unquote(item_decoder),
+        unquote(keep_ast)
+      )
     end
   end
 
@@ -192,10 +197,16 @@ defmodule Skir.Struct.TypeResolver do
 
   def decode_binary_ast({:array, inner, opts}, bits_ast, keep_ast) when is_list(opts) do
     key_field = Keyword.get(opts, :key)
-    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+
+    item_decoder =
+      quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
 
     quote do
-      case Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast)) do
+      case Skir.Struct.TypeResolver.decode_array(
+             unquote(bits_ast),
+             unquote(item_decoder),
+             unquote(keep_ast)
+           ) do
         {:ok, {items, rest}} ->
           {:ok, {Skir.KeyedList.new(items, unquote(key_field)), rest}}
 
@@ -460,9 +471,15 @@ defmodule Skir.Struct.TypeResolver do
   """
   def decode_array(<<0x00, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
   def decode_array(<<0xF6, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
-  def decode_array(<<0xF7, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 1, [], keep)
-  def decode_array(<<0xF8, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 2, [], keep)
-  def decode_array(<<0xF9, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 3, [], keep)
+
+  def decode_array(<<0xF7, r::bits>>, decoder, keep),
+    do: decode_array_items(r, decoder, 1, [], keep)
+
+  def decode_array(<<0xF8, r::bits>>, decoder, keep),
+    do: decode_array_items(r, decoder, 2, [], keep)
+
+  def decode_array(<<0xF9, r::bits>>, decoder, keep),
+    do: decode_array_items(r, decoder, 3, [], keep)
 
   def decode_array(<<0xFA, r::bits>>, decoder, keep) do
     case Number.decode_uint32(r) do
@@ -494,16 +511,20 @@ defmodule Skir.Struct.TypeResolver do
   def float_to_json(:nan), do: "NaN"
   def float_to_json(:infinity), do: "Infinity"
   def float_to_json(:neg_infinity), do: "-Infinity"
+
   def float_to_json(v) when is_float(v) do
     t = trunc(v)
     if t == v, do: t, else: v
   end
+
   def float_to_json(v), do: v
 
   @doc false
   # int64 -> JSON: string if outside JS safe-integer range, else number.
-  def int_to_json(v) when is_integer(v) and v >= -9_007_199_254_740_991 and v <= 9_007_199_254_740_991,
-    do: v
+  def int_to_json(v)
+      when is_integer(v) and v >= -9_007_199_254_740_991 and v <= 9_007_199_254_740_991,
+      do: v
+
   def int_to_json(v) when is_integer(v), do: Integer.to_string(v)
 
   @doc false
@@ -565,12 +586,14 @@ defmodule Skir.Struct.TypeResolver do
       :error -> ""
     end
   end
+
   def json_to_bytes(s) when is_binary(s) do
     case Base.decode64(s) do
       {:ok, b} -> b
       :error -> ""
     end
   end
+
   def json_to_bytes(_), do: ""
 
   @doc false
@@ -583,7 +606,9 @@ defmodule Skir.Struct.TypeResolver do
 
   defp parse_int_lenient(s) when is_binary(s) do
     case Integer.parse(s) do
-      {n, ""} -> n
+      {n, ""} ->
+        n
+
       _ ->
         case Float.parse(s) do
           {f, ""} -> trunc(f)
@@ -594,7 +619,9 @@ defmodule Skir.Struct.TypeResolver do
 
   defp parse_float_lenient(s) when is_binary(s) do
     case Float.parse(s) do
-      {f, ""} -> f
+      {f, ""} ->
+        f
+
       _ ->
         case Integer.parse(s) do
           {n, ""} -> n * 1.0

@@ -141,8 +141,15 @@ defmodule Skir.Struct do
 
       @spec to_json(t()) :: binary()
       @spec to_json(t(), :dense | :readable) :: binary()
-      def to_json(value, flavor \\ :dense),
-        do: Skir.Serializer.encode_json(__skir_serializer__(), value, flavor)
+      def to_json(value, flavor \\ :dense)
+
+      def to_json(value, :dense) do
+        __skir_to_dense_json__(value) |> JSON.encode_to_iodata!() |> IO.iodata_to_binary()
+      end
+
+      def to_json(value, :readable) do
+        __skir_to_readable_json__(value) |> Jason.encode!(pretty: true)
+      end
 
       @spec from_binary(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
       @spec from_binary(binary(), keyword()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
@@ -183,11 +190,25 @@ defmodule Skir.Struct do
         end
       end
 
-      @spec from_json(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
-      def from_json(bin), do: Skir.Serializer.decode_json(__skir_serializer__(), bin)
+      # @spec from_json(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
+      # def from_json(bin), do: Skir.Serializer.decode_json(__skir_serializer__(), bin)
 
-      @spec from_json!(binary()) :: t()
-      def from_json!(bin), do: Skir.Serializer.decode_json!(__skir_serializer__(), bin)
+      # @spec from_json!(binary()) :: t()
+      # def from_json!(bin), do: Skir.Serializer.decode_json!(__skir_serializer__(), bin)
+
+      def from_json(bin), do: from_json(bin, [])
+
+      def from_json(bin, opts) do
+        {:ok, from_json!(bin, opts)}
+      rescue
+        e in Skir.DecodeError -> {:error, e}
+      end
+
+      def from_json!(bin, opts \\ []) when is_binary(bin) do
+        keep = if Keyword.get(opts, :keep, false), do: :keep, else: :drop
+        term = JSON.decode!(bin)
+        __skir_decode_json__(term, [], keep)
+      end
 
       # Reflection
 
