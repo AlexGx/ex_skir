@@ -151,8 +151,37 @@ defmodule Skir.Struct do
 
       @spec from_binary!(binary()) :: t()
       @spec from_binary!(binary(), keyword()) :: t()
-      def from_binary!(bytes, opts \\ []),
-        do: Skir.Serializer.decode_binary!(__skir_serializer__(), bytes, opts)
+      def from_binary!(bytes, opts \\ []) do
+        keep = if Keyword.get(opts, :keep, false), do: :keep, else: :drop
+
+        case bytes do
+          <<"skir", body::binary>> ->
+            case __skir_decode_binary__(body, keep) do
+              {:ok, {value, _rest}} ->
+                value
+
+              {:error, reason} ->
+                raise Skir.DecodeError,
+                  path: [],
+                  expected: :binary,
+                  got: reason,
+                  reason: :malformed_input
+            end
+
+          _ ->
+            # No magic prefix — try JSON (still via old serializer path until Stage 5).
+            try do
+              from_json!(bytes)
+            rescue
+              _ ->
+                raise Skir.DecodeError,
+                  path: [],
+                  expected: :binary,
+                  got: bytes,
+                  reason: :malformed_input
+            end
+        end
+      end
 
       @spec from_json(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
       def from_json(bin), do: Skir.Serializer.decode_json(__skir_serializer__(), bin)

@@ -181,10 +181,15 @@ defmodule Skir.Struct.TypeResolver do
     # inner type's decode AST. This is the one place we use a closure in the
     # generated decode path; arrays are inherently variable-length so a
     # runtime loop is needed regardless.
-    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+    item_decoder =
+      quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
 
     quote do
-      Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast))
+      Skir.Struct.TypeResolver.decode_array(
+        unquote(bits_ast),
+        unquote(item_decoder),
+        unquote(keep_ast)
+      )
     end
   end
 
@@ -192,10 +197,16 @@ defmodule Skir.Struct.TypeResolver do
 
   def decode_binary_ast({:array, inner, opts}, bits_ast, keep_ast) when is_list(opts) do
     key_field = Keyword.get(opts, :key)
-    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+
+    item_decoder =
+      quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
 
     quote do
-      case Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast)) do
+      case Skir.Struct.TypeResolver.decode_array(
+             unquote(bits_ast),
+             unquote(item_decoder),
+             unquote(keep_ast)
+           ) do
         {:ok, {items, rest}} ->
           {:ok, {Skir.KeyedList.new(items, unquote(key_field)), rest}}
 
@@ -233,9 +244,15 @@ defmodule Skir.Struct.TypeResolver do
   """
   def decode_array(<<0x00, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
   def decode_array(<<0xF6, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
-  def decode_array(<<0xF7, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 1, [], keep)
-  def decode_array(<<0xF8, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 2, [], keep)
-  def decode_array(<<0xF9, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 3, [], keep)
+
+  def decode_array(<<0xF7, r::bits>>, decoder, keep),
+    do: decode_array_items(r, decoder, 1, [], keep)
+
+  def decode_array(<<0xF8, r::bits>>, decoder, keep),
+    do: decode_array_items(r, decoder, 2, [], keep)
+
+  def decode_array(<<0xF9, r::bits>>, decoder, keep),
+    do: decode_array_items(r, decoder, 3, [], keep)
 
   def decode_array(<<0xFA, r::bits>>, decoder, keep) do
     case Number.decode_uint32(r) do

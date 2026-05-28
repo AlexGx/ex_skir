@@ -8,7 +8,6 @@ defmodule Skir.Struct.Codegen do
   #   Stage 3 — __skir_encode_binary__/2            (generated alongside;
   #             to_binary/1 not switched until diff-tested)
 
-
   @doc """
   Generates all codegen-managed functions for a struct module.
   Returns a quoted block to splice into the module body via `__before_compile__`.
@@ -483,14 +482,18 @@ defmodule Skir.Struct.Codegen do
   end
 
   defp decode_slot_body({:field, f}, _idx, is_last, next_name) do
-    decode_ast = Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
+    decode_ast =
+      Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
+
     field_name = f.name
 
     continue =
       if is_last do
         quote(do: {:ok, {Map.put(acc, unquote(field_name), v), r1}})
       else
-        quote(do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep))
+        quote(
+          do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep)
+        )
       end
 
     quote do
