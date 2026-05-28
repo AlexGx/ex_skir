@@ -452,6 +452,103 @@ defmodule Skir.Struct.TypeResolver do
   end
 
   # ===========================================================================
+  # type_sig_ast/2  (TypeSignature for the type descriptor)
+  # ===========================================================================
+  #
+  # Returns AST evaluating to a TypeSignature tuple:
+  #   {:primitive, p} | {:optional, sig} | {:array, sig, key_extractor} | {:record, id}
+  #
+  # `self_id` is the current module's record id ("module_path:qualified_name"),
+  # used for self-recursive fields so we reference the record by id rather than
+  # descending into it (which would loop forever — mirrors gleam Lazy).
+
+  def type_sig_ast(:bool, _self_id), do: {:primitive, :bool}
+  def type_sig_ast(:int32, _self_id), do: {:primitive, :int32}
+  def type_sig_ast(:int64, _self_id), do: {:primitive, :int64}
+  def type_sig_ast(:hash64, _self_id), do: {:primitive, :hash64}
+  def type_sig_ast(:float32, _self_id), do: {:primitive, :float32}
+  def type_sig_ast(:float64, _self_id), do: {:primitive, :float64}
+  def type_sig_ast(:timestamp, _self_id), do: {:primitive, :timestamp}
+  def type_sig_ast(:string, _self_id), do: {:primitive, :string}
+  def type_sig_ast(:bytes, _self_id), do: {:primitive, :bytes}
+
+  def type_sig_ast({:optional, inner}, self_id) do
+    inner_sig = type_sig_ast(inner, self_id)
+    quote(do: {:optional, unquote(inner_sig)})
+  end
+
+  def type_sig_ast({:array, inner}, self_id) do
+    inner_sig = type_sig_ast(inner, self_id)
+    quote(do: {:array, unquote(inner_sig), ""})
+  end
+
+  def type_sig_ast({:array, inner, opts}, self_id) when is_list(opts) do
+    inner_sig = type_sig_ast(inner, self_id)
+
+    key_extractor =
+      case Keyword.get(opts, :key) do
+        nil -> ""
+        kf -> key_extractor_str(kf)
+      end
+
+    quote(do: {:array, unquote(inner_sig), unquote(key_extractor)})
+  end
+
+  # Record field. Self-recursive -> {:record, self_id} literal. Other module ->
+  # take its type_sig at runtime via __skir_type_descriptor__().type_sig.
+  def type_sig_ast(mod, self_id) when is_atom(mod) do
+    quote do
+      if unquote(mod) == __MODULE__ do
+        {:record, unquote(self_id)}
+      else
+        unquote(mod).__skir_type_descriptor__().type_sig
+      end
+    end
+  end
+
+  # ---- key extractor string ----
+
+  # key path [:a, :b, :kind] -> "a.b.kind"; single atom :id -> "id".
+  def key_extractor_str(kf) when is_atom(kf), do: Atom.to_string(kf)
+  def key_extractor_str(kf) when is_list(kf), do: Enum.map_join(kf, ".", &Atom.to_string/1)
+
+  # ===========================================================================
+  # field_records_ast/2  (transitive records contributed by a field)
+  # ===========================================================================
+  #
+  # Returns AST evaluating to a records map (id => record_descriptor) for the
+  # records a field's type contributes. Primitives contribute nothing; record
+  # fields contribute the referenced module's records (its own + transitive).
+  # Self-recursive fields contribute NOTHING (empty) — the self record is added
+  # by the owning struct, and descending would loop.
+
+  def field_records_ast(:bool, _self_id), do: quote(do: %{})
+  def field_records_ast(:int32, _self_id), do: quote(do: %{})
+  def field_records_ast(:int64, _self_id), do: quote(do: %{})
+  def field_records_ast(:hash64, _self_id), do: quote(do: %{})
+  def field_records_ast(:float32, _self_id), do: quote(do: %{})
+  def field_records_ast(:float64, _self_id), do: quote(do: %{})
+  def field_records_ast(:timestamp, _self_id), do: quote(do: %{})
+  def field_records_ast(:string, _self_id), do: quote(do: %{})
+  def field_records_ast(:bytes, _self_id), do: quote(do: %{})
+
+  def field_records_ast({:optional, inner}, self_id), do: field_records_ast(inner, self_id)
+  def field_records_ast({:array, inner}, self_id), do: field_records_ast(inner, self_id)
+
+  def field_records_ast({:array, inner, opts}, self_id) when is_list(opts),
+    do: field_records_ast(inner, self_id)
+
+  def field_records_ast(mod, _self_id) when is_atom(mod) do
+    quote do
+      if unquote(mod) == __MODULE__ do
+        %{}
+      else
+        unquote(mod).__skir_type_descriptor__().records
+      end
+    end
+  end
+
+  # ===========================================================================
   # Runtime helpers (called from generated code)
   # ===========================================================================
 

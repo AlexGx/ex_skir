@@ -10,9 +10,10 @@ defmodule Skir.Struct.Codegen do
 
   @doc """
   Generates all codegen-managed functions for a struct module.
+  `meta` carries module_path, qualified_name, doc, removed for the type descriptor.
   Returns a quoted block to splice into the module body via `__before_compile__`.
   """
-  def generate(fields) do
+  def generate(fields, meta) do
     quote do
       unquote(gen_is_default(fields))
       unquote(gen_highest_non_default(fields))
@@ -22,6 +23,7 @@ defmodule Skir.Struct.Codegen do
       unquote(gen_decode_binary(fields))
       unquote(gen_to_json(fields))
       unquote(gen_decode_json(fields))
+      unquote(gen_type_descriptor(fields, meta))
     end
   end
 
@@ -763,6 +765,69 @@ defmodule Skir.Struct.Codegen do
 
       def __skir_decode_json__(other, path, _keep) do
         raise Skir.DecodeError, path: path, expected: :struct, got: other, reason: :type_mismatch
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Stage 6: __skir_type_descriptor__/0  (no persistent_term)
+  # ===========================================================================
+  #
+  # Builds %Skir.TypeDescriptor{type_sig: {:record, id}, records: %{...}}.
+  # The StructDescriptor and field type_sigs are compile-time literals where
+  # possible; records from other modules are pulled at call time via their
+  # generated __skir_type_descriptor__/0. Self-recursive fields reference the
+  # record by id with empty records (no descent). Mirrors
+  # Compiler.struct_type_descriptor. Not on the hot path; recomputed per call.
+
+  defp gen_type_descriptor(fields, meta) do
+    id = meta.module_path <> ":" <> meta.qualified_name
+    self_id = id
+    name = meta.qualified_name |> String.split(".") |> List.last()
+
+    # StructField list AST — name/number/field_type(sig)/doc per field.
+    field_descriptors_ast =
+      Enum.map(fields, fn f ->
+        sig_ast = Skir.Struct.TypeResolver.type_sig_ast(f.type, self_id)
+        field_name = Atom.to_string(f.name)
+        field_doc = f.doc || ""
+
+        quote do
+          %Skir.TypeDescriptor.StructField{
+            name: unquote(field_name),
+            number: unquote(f.number),
+            field_type: unquote(sig_ast),
+            doc: unquote(field_doc)
+          }
+        end
+      end)
+
+    # Records contributed by each field (transitive), merged at runtime.
+    field_records_asts =
+      Enum.map(fields, fn f ->
+        Skir.Struct.TypeResolver.field_records_ast(f.type, self_id)
+      end)
+
+    merged_field_records_ast =
+      Enum.reduce(field_records_asts, quote(do: %{}), fn rec_ast, acc ->
+        quote(do: Map.merge(unquote(acc), unquote(rec_ast)))
+      end)
+
+    quote do
+      def __skir_type_descriptor__ do
+        sd = %Skir.TypeDescriptor.StructDescriptor{
+          name: unquote(name),
+          qualified_name: unquote(meta.qualified_name),
+          module_path: unquote(meta.module_path),
+          doc: unquote(meta.doc || ""),
+          removed_numbers: unquote(Macro.escape(meta.removed)),
+          fields: unquote(field_descriptors_ast)
+        }
+
+        all_records = unquote(merged_field_records_ast)
+        records = Map.put(all_records, unquote(id), {:struct, sd})
+
+        %Skir.TypeDescriptor{type_sig: {:record, unquote(id)}, records: records}
       end
     end
   end
