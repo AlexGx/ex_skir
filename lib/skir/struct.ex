@@ -73,7 +73,19 @@ defmodule Skir.Struct do
 
       @__skir_fields_meta__ unquote(Macro.escape(fields))
 
-      unquote(Skir.Struct.Codegen.generate(fields))
+      unquote(
+        Skir.Struct.Codegen.generate(
+          fields,
+          %{
+            module_path: Module.get_attribute(env.module, :__skir_module_path__) || "",
+            qualified_name:
+              Module.get_attribute(env.module, :__skir_qualified_name__) ||
+                env.module |> Module.split() |> List.last(),
+            doc: Module.get_attribute(env.module, :__skir_doc__) || "",
+            removed: removed
+          }
+        )
+      )
 
       # Constructors
 
