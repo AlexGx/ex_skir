@@ -178,8 +178,7 @@ defmodule Skir.Enum do
       with the 4-byte `"skir"` magic so receivers can dispatch between
       binary and JSON without out-of-band metadata.
       """
-      def to_binary(value),
-        do: Skir.Serializer.encode_binary(__skir_serializer__(), value)
+      def to_binary(value), do: IO.iodata_to_binary(__skir_encode_binary__(value, ["skir"]))
 
       @doc """
       Encode the enum value to JSON. `flavor` controls the format:
@@ -187,8 +186,13 @@ defmodule Skir.Enum do
         * `:dense` — variant number (or `[number, payload]` for wrappers).
         * `:readable` — variant name (or `%{"kind" => name, "value" => ...}`).
       """
-      def to_json(value, flavor \\ :dense),
-        do: Skir.Serializer.encode_json(__skir_serializer__(), value, flavor)
+      def to_json(value, flavor \\ :dense)
+
+      def to_json(value, :dense),
+        do: __skir_to_dense_json__(value) |> JSON.encode_to_iodata!() |> IO.iodata_to_binary()
+
+      def to_json(value, :readable),
+        do: __skir_to_readable_json__(value) |> Jason.encode!(pretty: true)
 
       @doc """
       Decode bytes into an enum value. Dispatches by content:
@@ -204,23 +208,62 @@ defmodule Skir.Enum do
           `{:unknown, %Skir.Unrecognized{}}` so re-encoding produces
           byte-identical output. Default: `false`.
       """
-      def from_binary(bytes, opts \\ []),
-        do: Skir.Serializer.decode_binary(__skir_serializer__(), bytes, opts)
+      def from_binary(bytes, opts \\ []) do
+        {:ok, from_binary!(bytes, opts)}
+      rescue
+        e in Skir.DecodeError -> {:error, e}
+      end
 
       @doc "Like `from_binary/2` but raises `Skir.DecodeError` on failure."
       @spec from_binary!(binary()) :: t()
-      def from_binary!(bytes, opts \\ []),
-        do: Skir.Serializer.decode_binary!(__skir_serializer__(), bytes, opts)
+      def from_binary!(bytes, opts \\ []) do
+        keep = if Keyword.get(opts, :keep, false), do: :keep, else: :drop
+
+        case bytes do
+          <<"skir", body::binary>> ->
+            case __skir_decode_binary__(body, keep) do
+              {:ok, {value, _rest}} ->
+                value
+
+              {:error, reason} ->
+                raise Skir.DecodeError,
+                  path: [],
+                  expected: :binary,
+                  got: reason,
+                  reason: :malformed_input
+            end
+
+          _ ->
+            try do
+              from_json!(bytes)
+            rescue
+              _ ->
+                raise Skir.DecodeError,
+                  path: [],
+                  expected: :binary,
+                  got: bytes,
+                  reason: :malformed_input
+            end
+        end
+      end
 
       @doc "Decode a JSON string into an enum value."
       @spec from_json(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
-      def from_json(bin),
-        do: Skir.Serializer.decode_json(__skir_serializer__(), bin)
+      def from_json(bin), do: from_json(bin, [])
+
+      def from_json(bin, opts) do
+        {:ok, from_json!(bin, opts)}
+      rescue
+        e in Skir.DecodeError -> {:error, e}
+      end
 
       @doc "Like `from_json/1` but raises `Skir.DecodeError` on failure."
       @spec from_json!(binary()) :: t()
-      def from_json!(bin),
-        do: Skir.Serializer.decode_json!(__skir_serializer__(), bin)
+      def from_json!(bin, opts \\ []) when is_binary(bin) do
+        keep = if Keyword.get(opts, :keep, false), do: :keep, else: :drop
+        term = JSON.decode!(bin)
+        __skir_decode_json__(term, [], keep)
+      end
     end
   end
 
