@@ -153,8 +153,11 @@ defmodule Skir.Struct do
 
       @spec from_binary(binary()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
       @spec from_binary(binary(), keyword()) :: {:ok, t()} | {:error, Skir.DecodeError.t()}
-      def from_binary(bytes, opts \\ []),
-        do: Skir.Serializer.decode_binary(__skir_serializer__(), bytes, opts)
+      def from_binary(bytes, opts \\ []) do
+        {:ok, from_binary!(bytes, opts)}
+      rescue
+        e in Skir.DecodeError -> {:error, e}
+      end
 
       @spec from_binary!(binary()) :: t()
       @spec from_binary!(binary(), keyword()) :: t()
