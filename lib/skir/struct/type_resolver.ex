@@ -181,15 +181,10 @@ defmodule Skir.Struct.TypeResolver do
     # inner type's decode AST. This is the one place we use a closure in the
     # generated decode path; arrays are inherently variable-length so a
     # runtime loop is needed regardless.
-    item_decoder =
-      quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
 
     quote do
-      Skir.Struct.TypeResolver.decode_array(
-        unquote(bits_ast),
-        unquote(item_decoder),
-        unquote(keep_ast)
-      )
+      Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast))
     end
   end
 
@@ -197,16 +192,10 @@ defmodule Skir.Struct.TypeResolver do
 
   def decode_binary_ast({:array, inner, opts}, bits_ast, keep_ast) when is_list(opts) do
     key_field = Keyword.get(opts, :key)
-
-    item_decoder =
-      quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
+    item_decoder = quote(do: fn b, k -> unquote(decode_binary_ast(inner, quote(do: b), quote(do: k))) end)
 
     quote do
-      case Skir.Struct.TypeResolver.decode_array(
-             unquote(bits_ast),
-             unquote(item_decoder),
-             unquote(keep_ast)
-           ) do
+      case Skir.Struct.TypeResolver.decode_array(unquote(bits_ast), unquote(item_decoder), unquote(keep_ast)) do
         {:ok, {items, rest}} ->
           {:ok, {Skir.KeyedList.new(items, unquote(key_field)), rest}}
 
@@ -221,6 +210,233 @@ defmodule Skir.Struct.TypeResolver do
   def decode_binary_ast(mod, bits_ast, keep_ast) when is_atom(mod) do
     quote do
       unquote(mod).__skir_decode_binary__(unquote(bits_ast), unquote(keep_ast))
+    end
+  end
+
+  # ===========================================================================
+  # to_json_dense_ast/1  (returns JSON-encodable term for :dense)
+  # ===========================================================================
+  #
+  # Mirrors Builtin's to_json closures for :dense flavor. Returns AST that
+  # evaluates to a JSON-encodable value (number, string, bool, list, nil).
+
+  def to_json_dense_ast(:bool, value_ast),
+    do: quote(do: if(unquote(value_ast), do: 1, else: 0))
+
+  def to_json_dense_ast(:int32, value_ast), do: value_ast
+
+  def to_json_dense_ast(:int64, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.int_to_json(unquote(value_ast)))
+
+  def to_json_dense_ast(:hash64, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.hash_to_json(unquote(value_ast)))
+
+  def to_json_dense_ast(:float32, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.float_to_json(unquote(value_ast)))
+
+  def to_json_dense_ast(:float64, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.float_to_json(unquote(value_ast)))
+
+  def to_json_dense_ast(:string, value_ast), do: value_ast
+
+  def to_json_dense_ast(:bytes, value_ast),
+    do: quote(do: Base.encode64(unquote(value_ast)))
+
+  def to_json_dense_ast(:timestamp, value_ast),
+    do: quote(do: DateTime.to_unix(unquote(value_ast), :millisecond))
+
+  def to_json_dense_ast({:optional, inner}, value_ast) do
+    inner_json = to_json_dense_ast(inner, quote(do: x))
+
+    quote do
+      case unquote(value_ast) do
+        nil -> nil
+        x -> unquote(inner_json)
+      end
+    end
+  end
+
+  def to_json_dense_ast({:array, inner}, value_ast) do
+    item_json = to_json_dense_ast(inner, quote(do: item))
+
+    quote do
+      Enum.map(unquote(value_ast), fn item -> unquote(item_json) end)
+    end
+  end
+
+  def to_json_dense_ast({:array, inner, opts}, value_ast) when is_list(opts) do
+    item_json = to_json_dense_ast(inner, quote(do: item))
+
+    quote do
+      items =
+        case unquote(value_ast) do
+          %Skir.KeyedList{items: its} -> its
+          list when is_list(list) -> list
+        end
+
+      Enum.map(items, fn item -> unquote(item_json) end)
+    end
+  end
+
+  def to_json_dense_ast(mod, value_ast) when is_atom(mod) do
+    quote do
+      case unquote(value_ast) do
+        {:__lazy_default__, _} -> []
+        v -> unquote(mod).__skir_to_dense_json__(v)
+      end
+    end
+  end
+
+  # ===========================================================================
+  # to_json_readable_ast/1  (returns JSON-encodable term for :readable)
+  # ===========================================================================
+
+  def to_json_readable_ast(:bool, value_ast), do: value_ast
+  def to_json_readable_ast(:int32, value_ast), do: value_ast
+
+  def to_json_readable_ast(:int64, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.int_to_json(unquote(value_ast)))
+
+  def to_json_readable_ast(:hash64, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.hash_to_json(unquote(value_ast)))
+
+  def to_json_readable_ast(:float32, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.float_to_json(unquote(value_ast)))
+
+  def to_json_readable_ast(:float64, value_ast),
+    do: quote(do: Skir.Struct.TypeResolver.float_to_json(unquote(value_ast)))
+
+  def to_json_readable_ast(:string, value_ast), do: value_ast
+
+  def to_json_readable_ast(:bytes, value_ast),
+    do: quote(do: "hex:" <> Base.encode16(unquote(value_ast), case: :lower))
+
+  def to_json_readable_ast(:timestamp, value_ast) do
+    quote do
+      dt = unquote(value_ast)
+
+      Jason.OrderedObject.new([
+        {"unix_millis", DateTime.to_unix(dt, :millisecond)},
+        {"formatted", DateTime.to_iso8601(dt)}
+      ])
+    end
+  end
+
+  def to_json_readable_ast({:optional, inner}, value_ast) do
+    inner_json = to_json_readable_ast(inner, quote(do: x))
+
+    quote do
+      case unquote(value_ast) do
+        nil -> nil
+        x -> unquote(inner_json)
+      end
+    end
+  end
+
+  def to_json_readable_ast({:array, inner}, value_ast) do
+    item_json = to_json_readable_ast(inner, quote(do: item))
+    quote(do: Enum.map(unquote(value_ast), fn item -> unquote(item_json) end))
+  end
+
+  def to_json_readable_ast({:array, inner, opts}, value_ast) when is_list(opts) do
+    item_json = to_json_readable_ast(inner, quote(do: item))
+
+    quote do
+      items =
+        case unquote(value_ast) do
+          %Skir.KeyedList{items: its} -> its
+          list when is_list(list) -> list
+        end
+
+      Enum.map(items, fn item -> unquote(item_json) end)
+    end
+  end
+
+  def to_json_readable_ast(mod, value_ast) when is_atom(mod) do
+    quote do
+      case unquote(value_ast) do
+        {:__lazy_default__, _} -> Jason.OrderedObject.new([])
+        v -> unquote(mod).__skir_to_readable_json__(v)
+      end
+    end
+  end
+
+  # ===========================================================================
+  # decode_json_ast/3  (term, path, keep) -> decoded value
+  # ===========================================================================
+  #
+  # Mirrors Builtin's decode_json closures (lenient parsing). The path/keep
+  # args are threaded for nested struct/array error reporting and keep.
+
+  def decode_json_ast(:bool, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_bool(unquote(term_ast)))
+
+  def decode_json_ast(:int32, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_int(unquote(term_ast)))
+
+  def decode_json_ast(:int64, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_int64(unquote(term_ast)))
+
+  def decode_json_ast(:hash64, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_hash(unquote(term_ast)))
+
+  def decode_json_ast(:float32, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_float(unquote(term_ast)))
+
+  def decode_json_ast(:float64, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_float(unquote(term_ast)))
+
+  def decode_json_ast(:string, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_string(unquote(term_ast)))
+
+  def decode_json_ast(:bytes, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_bytes(unquote(term_ast)))
+
+  def decode_json_ast(:timestamp, term_ast, _path, _keep),
+    do: quote(do: Skir.Struct.TypeResolver.json_to_timestamp(unquote(term_ast)))
+
+  def decode_json_ast({:optional, inner}, term_ast, path, keep) do
+    inner_decode = decode_json_ast(inner, quote(do: v), path, keep)
+
+    quote do
+      case unquote(term_ast) do
+        nil -> nil
+        0 -> nil
+        v -> unquote(inner_decode)
+      end
+    end
+  end
+
+  def decode_json_ast({:array, inner}, term_ast, path, keep) do
+    inner_decode = decode_json_ast(inner, quote(do: item), path, keep)
+
+    quote do
+      case unquote(term_ast) do
+        list when is_list(list) -> Enum.map(list, fn item -> unquote(inner_decode) end)
+        _ -> []
+      end
+    end
+  end
+
+  def decode_json_ast({:array, inner, opts}, term_ast, path, keep) when is_list(opts) do
+    key_field = Keyword.get(opts, :key)
+    inner_decode = decode_json_ast(inner, quote(do: item), path, keep)
+
+    quote do
+      case unquote(term_ast) do
+        list when is_list(list) ->
+          items = Enum.map(list, fn item -> unquote(inner_decode) end)
+          Skir.KeyedList.new(items, unquote(key_field))
+
+        _ ->
+          Skir.KeyedList.empty(unquote(key_field))
+      end
+    end
+  end
+
+  def decode_json_ast(mod, term_ast, path, keep) when is_atom(mod) do
+    quote do
+      unquote(mod).__skir_decode_json__(unquote(term_ast), unquote(path), unquote(keep))
     end
   end
 
@@ -244,15 +460,9 @@ defmodule Skir.Struct.TypeResolver do
   """
   def decode_array(<<0x00, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
   def decode_array(<<0xF6, r::bits>>, _decoder, _keep), do: {:ok, {[], r}}
-
-  def decode_array(<<0xF7, r::bits>>, decoder, keep),
-    do: decode_array_items(r, decoder, 1, [], keep)
-
-  def decode_array(<<0xF8, r::bits>>, decoder, keep),
-    do: decode_array_items(r, decoder, 2, [], keep)
-
-  def decode_array(<<0xF9, r::bits>>, decoder, keep),
-    do: decode_array_items(r, decoder, 3, [], keep)
+  def decode_array(<<0xF7, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 1, [], keep)
+  def decode_array(<<0xF8, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 2, [], keep)
+  def decode_array(<<0xF9, r::bits>>, decoder, keep), do: decode_array_items(r, decoder, 3, [], keep)
 
   def decode_array(<<0xFA, r::bits>>, decoder, keep) do
     case Number.decode_uint32(r) do
@@ -272,6 +482,131 @@ defmodule Skir.Struct.TypeResolver do
     case decoder.(bits, keep) do
       {:ok, {v, rest}} -> decode_array_items(rest, decoder, n - 1, [v | acc], keep)
       {:error, _} = err -> err
+    end
+  end
+
+  # ---- JSON value helpers (mirror Builtin semantics) ----
+
+  @epoch ~U[1970-01-01 00:00:00.000Z]
+
+  @doc false
+  # Float -> JSON value: whole floats become integers (so "1" not "1.0").
+  def float_to_json(:nan), do: "NaN"
+  def float_to_json(:infinity), do: "Infinity"
+  def float_to_json(:neg_infinity), do: "-Infinity"
+  def float_to_json(v) when is_float(v) do
+    t = trunc(v)
+    if t == v, do: t, else: v
+  end
+  def float_to_json(v), do: v
+
+  @doc false
+  # int64 -> JSON: string if outside JS safe-integer range, else number.
+  def int_to_json(v) when is_integer(v) and v >= -9_007_199_254_740_991 and v <= 9_007_199_254_740_991,
+    do: v
+  def int_to_json(v) when is_integer(v), do: Integer.to_string(v)
+
+  @doc false
+  # hash64 -> JSON: string if > safe-integer max, else number.
+  def hash_to_json(v) when is_integer(v) and v <= 9_007_199_254_740_991, do: v
+  def hash_to_json(v) when is_integer(v), do: Integer.to_string(v)
+
+  @doc false
+  def json_to_bool(true), do: true
+  def json_to_bool(false), do: false
+  def json_to_bool(nil), do: false
+  def json_to_bool(n) when is_integer(n), do: n != 0
+  def json_to_bool(f) when is_float(f), do: f != 0.0
+  def json_to_bool("0"), do: false
+  def json_to_bool(s) when is_binary(s), do: true
+  def json_to_bool(_), do: false
+
+  @doc false
+  def json_to_int(n) when is_integer(n), do: n
+  def json_to_int(f) when is_float(f), do: trunc(f)
+  def json_to_int(nil), do: 0
+  def json_to_int(s) when is_binary(s), do: parse_int_lenient(s)
+  def json_to_int(_), do: 0
+
+  @doc false
+  def json_to_int64(n) when is_integer(n), do: n
+  def json_to_int64(f) when is_float(f), do: round(f)
+  def json_to_int64(nil), do: 0
+  def json_to_int64(s) when is_binary(s), do: parse_int_lenient(s)
+  def json_to_int64(_), do: 0
+
+  @doc false
+  def json_to_hash(n) when is_integer(n) and n >= 0, do: n
+  def json_to_hash(n) when is_integer(n), do: 0
+  def json_to_hash(f) when is_float(f) and f >= 0.0, do: round(f)
+  def json_to_hash(f) when is_float(f), do: 0
+  def json_to_hash(nil), do: 0
+  def json_to_hash(s) when is_binary(s), do: parse_int_lenient(s)
+  def json_to_hash(_), do: 0
+
+  @doc false
+  def json_to_float(f) when is_float(f), do: f
+  def json_to_float(n) when is_integer(n), do: n * 1.0
+  def json_to_float(nil), do: 0.0
+  def json_to_float("NaN"), do: :nan
+  def json_to_float("Infinity"), do: :infinity
+  def json_to_float("-Infinity"), do: :neg_infinity
+  def json_to_float(s) when is_binary(s), do: parse_float_lenient(s)
+  def json_to_float(_), do: 0.0
+
+  @doc false
+  def json_to_string(s) when is_binary(s), do: s
+  def json_to_string(_), do: ""
+
+  @doc false
+  def json_to_bytes("hex:" <> hex) do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, b} -> b
+      :error -> ""
+    end
+  end
+  def json_to_bytes(s) when is_binary(s) do
+    case Base.decode64(s) do
+      {:ok, b} -> b
+      :error -> ""
+    end
+  end
+  def json_to_bytes(_), do: ""
+
+  @doc false
+  def json_to_timestamp(ms) when is_integer(ms), do: from_unix_ms_safe(ms)
+  def json_to_timestamp(f) when is_float(f), do: from_unix_ms_safe(round(f))
+  def json_to_timestamp(%{"unix_millis" => ms}) when is_integer(ms), do: from_unix_ms_safe(ms)
+  def json_to_timestamp(nil), do: @epoch
+  def json_to_timestamp(s) when is_binary(s), do: from_unix_ms_safe(parse_int_lenient(s))
+  def json_to_timestamp(_), do: @epoch
+
+  defp parse_int_lenient(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> n
+      _ ->
+        case Float.parse(s) do
+          {f, ""} -> trunc(f)
+          _ -> 0
+        end
+    end
+  end
+
+  defp parse_float_lenient(s) when is_binary(s) do
+    case Float.parse(s) do
+      {f, ""} -> f
+      _ ->
+        case Integer.parse(s) do
+          {n, ""} -> n * 1.0
+          _ -> 0.0
+        end
+    end
+  end
+
+  defp from_unix_ms_safe(ms) when is_integer(ms) do
+    case DateTime.from_unix(ms, :millisecond) do
+      {:ok, dt} -> dt
+      _ -> @epoch
     end
   end
 end

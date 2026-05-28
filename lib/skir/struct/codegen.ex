@@ -8,6 +8,7 @@ defmodule Skir.Struct.Codegen do
   #   Stage 3 — __skir_encode_binary__/2            (generated alongside;
   #             to_binary/1 not switched until diff-tested)
 
+
   @doc """
   Generates all codegen-managed functions for a struct module.
   Returns a quoted block to splice into the module body via `__before_compile__`.
@@ -20,6 +21,8 @@ defmodule Skir.Struct.Codegen do
       unquote(gen_defaults_map(fields))
       unquote(gen_encode_binary(fields))
       unquote(gen_decode_binary(fields))
+      unquote(gen_to_json(fields))
+      unquote(gen_decode_json(fields))
     end
   end
 
@@ -482,18 +485,14 @@ defmodule Skir.Struct.Codegen do
   end
 
   defp decode_slot_body({:field, f}, _idx, is_last, next_name) do
-    decode_ast =
-      Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
-
+    decode_ast = Skir.Struct.TypeResolver.decode_binary_ast(f.type, quote(do: rest), quote(do: keep))
     field_name = f.name
 
     continue =
       if is_last do
         quote(do: {:ok, {Map.put(acc, unquote(field_name), v), r1}})
       else
-        quote(
-          do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep)
-        )
+        quote(do: unquote(next_name)(r1, remaining - 1, Map.put(acc, unquote(field_name), v), keep))
       end
 
     quote do
@@ -527,6 +526,238 @@ defmodule Skir.Struct.Codegen do
           {:ok, final_rest} -> {:ok, {struct(__MODULE__, acc), final_rest}}
           {:error, _} = err -> err
         end
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Stage 5: JSON  (to_dense, to_readable, decode_json)
+  # ===========================================================================
+
+  # --- to_json (dense + readable) ---
+
+  defp gen_to_json(fields) do
+    quote do
+      unquote(gen_to_dense_json(fields))
+      unquote(gen_to_readable_json(fields))
+    end
+  end
+
+  # Dense JSON: array of slots, approach (D). Two branches:
+  #   * preserved JSON tail -> all recognized slots + tail (no trim)
+  #   * normal -> Enum.take(slots, highest_non_default)
+  defp gen_to_dense_json(fields) do
+    positions = build_position_list(fields)
+    v = Macro.var(:v, __MODULE__)
+
+    all_slots_ast =
+      Enum.map(positions, fn pos -> dense_slot_ast(pos, v) end)
+
+    quote do
+      def __skir_to_dense_json__(
+            %__MODULE__{
+              __skir_unrecognized__: %Skir.Unrecognized{format: :json, data: tail}
+            } = unquote(v)
+          )
+          when tail != [] do
+        slots = unquote(all_slots_ast)
+        slots ++ tail
+      end
+
+      def __skir_to_dense_json__(%__MODULE__{} = unquote(v)) do
+        count = __skir_highest_non_default__(unquote(v))
+        slots = unquote(all_slots_ast)
+        Enum.take(slots, count)
+      end
+
+      def __skir_to_dense_json__({:__lazy_default__, _}), do: []
+    end
+  end
+
+  defp dense_slot_ast(:removed, _v), do: 0
+
+  defp dense_slot_ast({:field, f}, v) do
+    field_access = quote(do: unquote(v).unquote(Macro.var(f.name, nil)))
+    Skir.Struct.TypeResolver.to_json_dense_ast(f.type, field_access)
+  end
+
+  # Readable JSON: object with only non-default fields, in field order.
+  defp gen_to_readable_json(fields) do
+    v = Macro.var(:v, __MODULE__)
+
+    # Build a list of {include?, {name, value}} per field; filter at runtime.
+    pair_clauses =
+      Enum.map(fields, fn f ->
+        field_access = quote(do: unquote(v).unquote(Macro.var(f.name, nil)))
+        json_value = Skir.Struct.TypeResolver.to_json_readable_ast(f.type, field_access)
+        is_default_check = readable_is_default_ast(f.type, field_access)
+        name_str = Atom.to_string(f.name)
+
+        quote do
+          if unquote(is_default_check) do
+            []
+          else
+            [{unquote(name_str), unquote(json_value)}]
+          end
+        end
+      end)
+
+    pairs_ast =
+      Enum.reduce(pair_clauses, [], fn clause, acc ->
+        quote(do: unquote(acc) ++ unquote(clause))
+      end)
+
+    quote do
+      def __skir_to_readable_json__(%__MODULE__{} = unquote(v)) do
+        Jason.OrderedObject.new(unquote(pairs_ast))
+      end
+
+      def __skir_to_readable_json__({:__lazy_default__, _}) do
+        Jason.OrderedObject.new([])
+      end
+    end
+  end
+
+  # is-default check for a field value (used to skip default fields in readable).
+  defp readable_is_default_ast(:bool, va), do: quote(do: unquote(va) == false)
+  defp readable_is_default_ast(:int32, va), do: quote(do: unquote(va) == 0)
+  defp readable_is_default_ast(:int64, va), do: quote(do: unquote(va) == 0)
+  defp readable_is_default_ast(:hash64, va), do: quote(do: unquote(va) == 0)
+
+  defp readable_is_default_ast(:float32, va),
+    do: quote(do: unquote(va) == +0.0 or unquote(va) == -0.0)
+
+  defp readable_is_default_ast(:float64, va),
+    do: quote(do: unquote(va) == +0.0 or unquote(va) == -0.0)
+
+  defp readable_is_default_ast(:string, va), do: quote(do: unquote(va) == "")
+  defp readable_is_default_ast(:bytes, va), do: quote(do: unquote(va) == "")
+
+  defp readable_is_default_ast(:timestamp, va),
+    do: quote(do: unquote(va) == ~U[1970-01-01 00:00:00.000Z])
+
+  defp readable_is_default_ast({:optional, _}, va), do: quote(do: is_nil(unquote(va)))
+  defp readable_is_default_ast({:array, _}, va), do: quote(do: unquote(va) == [])
+
+  defp readable_is_default_ast({:array, _, _}, va) do
+    quote do
+      unquote(va) == [] or match?(%Skir.KeyedList{items: []}, unquote(va))
+    end
+  end
+
+  defp readable_is_default_ast(mod, va) when is_atom(mod) do
+    quote do
+      case unquote(va) do
+        {:__lazy_default__, _} ->
+          true
+
+        v ->
+          if function_exported?(unquote(mod), :__skir_is_default__, 1) do
+            unquote(mod).__skir_is_default__(v)
+          else
+            v == unquote(mod).default()
+          end
+      end
+    end
+  end
+
+  # --- decode_json (form dispatch: list | map | 0 | other) ---
+
+  defp gen_decode_json(fields) do
+    positions = build_position_list(fields)
+    recognized = length(positions)
+
+    # list form: dense array. index -> field decode.
+    list_field_clauses =
+      for {pos, idx} <- Enum.with_index(positions), match?({:field, _}, pos) do
+        {:field, f} = pos
+        decode_ast =
+          Skir.Struct.TypeResolver.decode_json_ast(
+            f.type,
+            quote(do: Enum.at(list, unquote(idx))),
+            quote(do: path ++ [unquote(f.name)]),
+            quote(do: keep)
+          )
+
+        {idx, f.name, decode_ast}
+      end
+
+    # Build the accumulator map for list form.
+    list_puts =
+      Enum.reduce(list_field_clauses, quote(do: acc0), fn {idx, name, decode_ast}, acc ->
+        quote do
+          acc = unquote(acc)
+
+          if unquote(idx) < length_list do
+            Map.put(acc, unquote(name), unquote(decode_ast))
+          else
+            acc
+          end
+        end
+      end)
+
+    # map form: readable object. key string -> field decode.
+    map_field_clauses =
+      for {:field, f} <- positions do
+        name_str = Atom.to_string(f.name)
+        decode_ast =
+          Skir.Struct.TypeResolver.decode_json_ast(
+            f.type,
+            quote(do: map_val),
+            quote(do: path ++ [unquote(f.name)]),
+            quote(do: keep)
+          )
+
+        quote do
+          case Map.fetch(map, unquote(name_str)) do
+            {:ok, map_val} -> Map.put(acc, unquote(f.name), unquote(decode_ast))
+            :error -> acc
+          end
+        end
+      end
+
+    map_puts =
+      Enum.reduce(map_field_clauses, quote(do: acc0), fn clause, acc ->
+        quote do
+          acc = unquote(acc)
+          unquote(clause)
+        end
+      end)
+
+    quote do
+      def __skir_decode_json__(list, path, keep) when is_list(list) do
+        acc0 = __skir_defaults_map__()
+        length_list = length(list)
+        fields_map = unquote(list_puts)
+
+        fields_map =
+          if keep == :keep and length_list > unquote(recognized) do
+            tail = Enum.drop(list, unquote(recognized))
+
+            Map.put(fields_map, :__skir_unrecognized__, %Skir.Unrecognized{
+              format: :json,
+              data: tail,
+              array_len: length_list
+            })
+          else
+            fields_map
+          end
+
+        struct(__MODULE__, fields_map)
+      end
+
+      def __skir_decode_json__(0, _path, _keep) do
+        struct(__MODULE__, __skir_defaults_map__())
+      end
+
+      def __skir_decode_json__(map, path, keep) when is_map(map) and not is_struct(map) do
+        acc0 = __skir_defaults_map__()
+        fields_map = unquote(map_puts)
+        struct(__MODULE__, fields_map)
+      end
+
+      def __skir_decode_json__(other, path, _keep) do
+        raise Skir.DecodeError, path: path, expected: :struct, got: other, reason: :type_mismatch
       end
     end
   end
