@@ -136,7 +136,8 @@ defmodule Skir.Struct do
 
       # User-facing API
       @spec to_binary(t()) :: binary()
-      def to_binary(value), do: Skir.Serializer.encode_binary(__skir_serializer__(), value)
+      # def to_binary(value), do: Skir.Serializer.encode_binary(__skir_serializer__(), value)
+      def to_binary(value), do: IO.iodata_to_binary(__skir_encode_binary__(value, ["skir"]))
 
       @spec to_json(t()) :: binary()
       @spec to_json(t(), :dense | :readable) :: binary()
