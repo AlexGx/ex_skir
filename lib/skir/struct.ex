@@ -51,9 +51,6 @@ defmodule Skir.Struct do
 
     field_names = Enum.map(fields, & &1.name)
     enforce = fields |> Enum.reject(&optional?/1) |> Enum.map(& &1.name)
-    # max_num = max_num(fields, removed)
-    #  positions = build_positions(fields, removed, max_num)
-    # defaults = defaults_map(fields)
 
     quote do
       @enforce_keys unquote(enforce)
@@ -86,7 +83,6 @@ defmodule Skir.Struct do
 
       # Constructors
 
-      # @review: deprecate in flavor of elixir native struct
       @spec new(unquote(Skir.Struct.TypeGen.new_input_map_ast(fields))) :: t()
       def new(fields) when is_map(fields) do
         struct!(__MODULE__, Skir.Struct.wrap_keyed_fields(fields, @__skir_fields_meta__))
@@ -98,7 +94,6 @@ defmodule Skir.Struct do
         struct(__MODULE__, Map.merge(__skir_defaults_map__(), wrapped))
       end
 
-      # @review: also not elixir idiomatic
       @spec merge(t(), map()) :: t()
       def merge(%__MODULE__{} = base, overrides) when is_map(overrides),
         do: struct(base, overrides)
@@ -147,7 +142,7 @@ defmodule Skir.Struct do
             end
 
           _ ->
-           # No magic prefix — try JSON.
+            # No magic prefix — try JSON.
             try do
               from_json!(bytes)
             rescue
@@ -232,27 +227,6 @@ defmodule Skir.Struct do
   defp optional?(%{type: {:array, _}}), do: true
   defp optional?(%{type: {:array, _, _}}), do: true
   defp optional?(_), do: false
-
-  # def default_for(:bool), do: false
-  # def default_for(:int32), do: 0
-  # def default_for(:int64), do: 0
-  # def default_for(:hash64), do: 0
-  # def default_for(:float32), do: 0.0
-  # def default_for(:float64), do: 0.0
-  # def default_for(:string), do: ""
-  # def default_for(:bytes), do: ""
-  # def default_for(:timestamp), do: ~U[1970-01-01 00:00:00.000Z]
-  # def default_for({:optional, _}), do: nil
-  # def default_for({:array, _}), do: []
-
-  # def default_for({:array, _, opts}) when is_list(opts) do
-  #   case Keyword.get(opts, :key) do
-  #     nil -> []
-  #     key_field -> Skir.KeyedList.empty(key_field)
-  #   end
-  # end
-
-  # def default_for(mod) when is_atom(mod), do: {:__lazy_default__, mod}
 
   @doc """
   For each keyed-list field in `fields_meta`, if the user passed a plain

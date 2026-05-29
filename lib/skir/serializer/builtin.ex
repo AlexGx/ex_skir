@@ -136,13 +136,9 @@ defmodule Skir.Serializer.Builtin do
     }
   end
 
-  # @review: experimental
   defp float_to_json_value(v) when is_float(v) do
-    truncated = trunc(v)
-
-    if truncated == v do
-      truncated
-    end || v
+    t = trunc(v)
+    if t == v, do: t, else: v
   end
 
   defp float_default?(0), do: true
@@ -408,21 +404,6 @@ defmodule Skir.Serializer.Builtin do
 
   # ---- helpers ----
 
-  # defp raise_type_mismatch(expected, got, path) do
-  #   raise DecodeError, path: path, expected: expected, got: got, reason: :type_mismatch
-  # end
-
-  # defp raise_out_of_range(expected, got, path) do
-  #   raise DecodeError, path: path, expected: expected, got: got, reason: :out_of_range
-  # end
-
-  # defp parse_int!(s, type, path) do
-  #   case Integer.parse(s) do
-  #     {n, ""} -> n
-  #     _ -> raise_type_mismatch(type, s, path)
-  #   end
-  # end
-
   # Lenient parse: tries integer parse, then float (rounded), then default 0.
   defp parse_int_lenient(s) when is_binary(s) do
     case Integer.parse(s) do
@@ -452,7 +433,6 @@ defmodule Skir.Serializer.Builtin do
   end
 
   # Safe conversion from unix millis to DateTime, returning epoch on overflow.
-  @epoch ~U[1970-01-01 00:00:00.000Z]
   defp from_unix_ms_safe(ms) when is_integer(ms) do
     case DateTime.from_unix(ms, :millisecond) do
       {:ok, dt} -> dt

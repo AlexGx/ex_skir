@@ -180,11 +180,13 @@ defmodule Skir.Service do
       `disable_studio: true`.
     * `"list"` — returns a JSON catalog of registered methods.
 
-  ## Caching
+  ## Building
 
-  Building a service rebuilds the registry maps each time. For HTTP servers,
-  see `Skir.Service.Cached` for an automatic-caching macro, or store the
-  built `%Service{}` in `:persistent_term` yourself.
+  Building a service assembles the registry maps and captures handler and
+  codec function references — cheap enough to build per call. For HTTP
+  servers, build once in `Skir.Plug.init/1` (the plug holds it in state for
+  the process lifetime). No global caching is used; if you need a shared
+  prebuilt instance, hold it in your own supervised state.
   """
 
   alias Skir.Method
@@ -548,23 +550,17 @@ defmodule Skir.Service do
       @behaviour __MODULE__
       unquote_splicing(callbacks)
 
-      @doc "Returns the built (and cached) `%Skir.Service{}` for this module."
+      @doc """
+      Returns the `%Skir.Service{}` for this module.
+
+      Builds the service fresh on each call — assembling the registry is
+      cheap (map insertions plus handler/codec function captures). For HTTP
+      servers, build once in `Skir.Plug.init/1`, which holds it in plug
+      state for the process lifetime, rather than rebuilding per request.
+      No global caching is used.
+      """
       @spec service() :: Skir.Service.t()
       def service do
-        key = {__MODULE__, :__skir_service__}
-
-        case :persistent_term.get(key, :__not_built__) do
-          :__not_built__ ->
-            built = build_service()
-            :persistent_term.put(key, built)
-            built
-
-          built ->
-            built
-        end
-      end
-
-      defp build_service do
         acc = Skir.Service.new(@__skir_service_opts__)
         unquote_splicing(add_calls)
         acc

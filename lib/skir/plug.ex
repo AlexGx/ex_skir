@@ -27,12 +27,26 @@ if Code.ensure_loaded?(Plug.Conn) do
     ## Options
 
       * `:service` — required. Zero-arity function returning a
-        `%Skir.Service{}`. If you use `Skir.Service.Cached`,
-        pass `&MyModule.service/0`.
+        `%Skir.Service{}` (e.g. `&MyModule.service/0` from
+        `use Skir.Service`). Called once in `init/1`; the result is held
+        in plug state.
 
       * `:meta_fn` — optional. Function `(Plug.Conn -> req_meta)` that
         builds your `RequestMeta` value from the connection (auth
         headers, client IP, etc.). Defaults to `fn _ -> nil end`.
+
+    ## Initialization
+
+    The plug builds the service in `init/1` and holds it in plug state.
+    Because a service holds function references (handlers, codecs), `init`
+    must run at runtime, not compile time:
+
+      * `forward "/api", to: Skir.Plug, init_opts: [service: ...]` — init
+        runs at runtime; works directly.
+      * `plug Skir.Plug, service: ...` in a `Plug.Builder` or Phoenix
+        pipeline — add `init_mode: :runtime` to that plug. Otherwise init
+        runs at compile time and cannot embed the service's function
+        references.
     """
 
     @behaviour Plug
@@ -43,33 +57,24 @@ if Code.ensure_loaded?(Plug.Conn) do
     def init(opts) do
       service_fn = Keyword.fetch!(opts, :service)
       meta_fn = Keyword.get(opts, :meta_fn, fn _ -> nil end)
-      %{service_fn: service_fn, meta_fn: meta_fn}
+      # Build the service once at init and hold it in plug state. Assembly is
+      # cheap; doing it here avoids rebuilding per request. The service holds
+      # function references, so init must run at runtime (see moduledoc).
+      %{service: service_fn.(), meta_fn: meta_fn}
     end
 
     @impl true
-    def call(conn, %{service_fn: service_fn, meta_fn: meta_fn}) do
+    def call(conn, %{service: service, meta_fn: meta_fn}) do
       {conn, body} = read_request_body(conn)
-      service = service_fn.()
       meta = meta_fn.(conn)
 
       {response, _state} = Skir.Service.handle_request(service, body, meta, nil)
 
       conn
-      # @review
-      # |> put_resp_content_type(response.content_type)
       |> put_resp_header("content-type", response.content_type)
       |> send_resp(response.status_code, response.data)
       |> halt()
     end
-
-    # @review
-    # defp read_request_body(%Plug.Conn{method: "POST"} = conn) do
-    #   case read_body(conn) do
-    #     {:ok, body, conn} -> {conn, body}
-    #     {:more, _, _} -> raise "request body too large"
-    #     {:error, reason} -> raise "failed to read body: #{inspect(reason)}"
-    #   end
-    # end
 
     defp read_request_body(%Plug.Conn{method: "POST"} = conn) do
       read_full_body(conn, [])

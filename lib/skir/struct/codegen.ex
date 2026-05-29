@@ -1,12 +1,6 @@
 defmodule Skir.Struct.Codegen do
   @moduledoc false
   # Compile-time code generation for Skir structs.
-  #
-  # Stages:
-  #   Stage 1 — __skir_is_default__/1, __skir_highest_non_default__/1
-  #   Stage 2 — default/0, __skir_defaults_map__/0  (no persistent_term)
-  #   Stage 3 — __skir_encode_binary__/2            (generated alongside;
-  #             to_binary/1 not switched until diff-tested)
 
   @doc """
   Generates all codegen-managed functions for a struct module.
@@ -774,7 +768,7 @@ defmodule Skir.Struct.Codegen do
   end
 
   # ===========================================================================
-  # Stage 6: __skir_type_descriptor__/0  (no persistent_term)
+  # Stage 6: __skir_type_descriptor__/0
   # ===========================================================================
   #
   # Builds %Skir.TypeDescriptor{type_sig: {:record, id}, records: %{...}}.
